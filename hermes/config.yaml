@@ -1,0 +1,69 @@
+# Copy or symlink this file into your Hermes home, or set HERMES_HOME to a directory that contains it.
+# Required: export HR_HERMES_ROOT to this repository root before starting Hermes so paths resolve.
+
+model: "anthropic/claude-sonnet-4-5-20250929"
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+privacy:
+  redact_pii: true
+
+cron:
+  wrap_response: false
+
+mcp_servers:
+  firestore:
+    command: "node"
+    args:
+      - "${HR_HERMES_ROOT}/mcp-servers/firestore-mcp/dist/index.js"
+    env:
+      FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
+      FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      HR_HERMES_ROOT: "${HR_HERMES_ROOT}"
+  gmail:
+    command: "node"
+    args:
+      - "${HR_HERMES_ROOT}/mcp-servers/gmail-mcp/dist/index.js"
+    env:
+      FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
+      FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      HR_HERMES_ROOT: "${HR_HERMES_ROOT}"
+      DRY_RUN: "${DRY_RUN}"
+  trello:
+    command: "node"
+    args:
+      - "${HR_HERMES_ROOT}/mcp-servers/trello-mcp/dist/index.js"
+    env:
+      FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
+      FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      HR_HERMES_ROOT: "${HR_HERMES_ROOT}"
+  slack:
+    command: "node"
+    args:
+      - "${HR_HERMES_ROOT}/mcp-servers/slack-mcp/dist/index.js"
+    env:
+      FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
+      FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      HR_HERMES_ROOT: "${HR_HERMES_ROOT}"

@@ -1,0 +1,37 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "emailThreads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "state", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "approvalTokens",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "threadId", "order": "ASCENDING" },
+        { "fieldPath": "used", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "skillReviewQueue",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "approvalSignals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "consumed", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

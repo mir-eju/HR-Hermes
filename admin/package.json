@@ -1,0 +1,19 @@
+{
+  "name": "@hr-hermes/admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hr-hermes/shared": "*",
+    "dotenv": "^16.4.7",
+    "googleapis": "^144.0.0",
+    "prompts": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/prompts": "^2.4.9",
+    "typescript": "^5.7.2"
+  }
+}

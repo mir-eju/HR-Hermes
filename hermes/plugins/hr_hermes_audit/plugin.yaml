@@ -1,0 +1,6 @@
+name: hr-hermes-audit
+version: 0.1.0
+description: Log MCP tool calls into Firestore auditLog via the admin hook-audit CLI
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call

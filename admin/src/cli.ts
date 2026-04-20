@@ -1,0 +1,358 @@
+#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import prompts from "prompts";
+import { createInterface } from "node:readline";
+import { collections, decrypt, initFirebaseFromConfig, loadConfig, writeAuditLog } from "@hr-hermes/shared";
+import type { AuditKind } from "@hr-hermes/shared";
+import {
+  createProject,
+  getProject,
+  listProjects,
+  setGlobalDryRunFlag,
+  setLearningEnabled,
+  setProjectActive,
+  setProjectDryRun,
+} from "./repos/projects.js";
+import { createTeam, getTeam, listTeams } from "./repos/teams.js";
+import { obtainRefreshToken } from "./gmailOAuth.js";
+import { writeProjectSkillFiles } from "./skillWriter.js";
+
+function repoRoot(): string {
+  const cfg = loadConfig();
+  return resolve(cfg.hrHermesRoot);
+}
+
+async function readMultiline(message: string): Promise<string> {
+  console.log(`${message} (end with a line containing only EOF on a new line, or type END)`);
+  const lines: string[] = [];
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  for await (const line of rl) {
+    if (line.trim() === "END" || line.trim() === "EOF") break;
+    lines.push(line);
+  }
+  rl.close();
+  return lines.join("\n");
+}
+
+function parseArgs(argv: string[]): Record<string, string | boolean> {
+  const out: Record<string, string | boolean> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (!next || next.startsWith("--")) {
+        out[key] = true;
+      } else {
+        out[key] = next;
+        i++;
+      }
+    }
+  }
+  return out;
+}
+
+async function cmdAddTeam(argv: string[]) {
+  const args = parseArgs(argv);
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  const id = (args.id as string) || (await prompts({ type: "text", name: "id", message: "Team id" })).id;
+  const name =
+    (args.name as string) || (await prompts({ type: "text", name: "name", message: "Team name" })).name;
+  if (!id || !name) throw new Error("id and name required");
+  await createTeam(db, { id: String(id), name: String(name) });
+  console.log(`Created team ${id}`);
+}
+
+async function cmdAddProject(argv: string[]) {
+  const args = parseArgs(argv);
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  const interactive = Boolean(args.interactive) || argv.length === 0;
+
+  const id = interactive
+    ? String((await prompts({ type: "text", name: "id", message: "Project id" })).id || "")
+    : String(args.id || "");
+  const name = interactive
+    ? String((await prompts({ type: "text", name: "name", message: "Project name" })).name || "")
+    : String(args.name || "");
+  const teamId = interactive
+    ? String((await prompts({ type: "text", name: "teamId", message: "Team id" })).teamId || "")
+    : String(args.teamId || "");
+  const clientName = interactive
+    ? String((await prompts({ type: "text", name: "clientName", message: "Client name" })).clientName || "")
+    : String(args.clientName || "");
+
+  if (!id || !name || !teamId || !clientName) throw new Error("Missing required fields");
+  const team = await getTeam(db, teamId);
+  if (!team) throw new Error(`Unknown team: ${teamId}`);
+
+  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID || "";
+  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
+  if (!clientId || !clientSecret) {
+    throw new Error("Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET for Gmail OAuth");
+  }
+  const redirectUri =
+    process.env.GOOGLE_OAUTH_REDIRECT_URI || "http://127.0.0.1:3333/oauth2callback";
+  const inboxEmail = interactive
+    ? String((await prompts({ type: "text", name: "inboxEmail", message: "Gmail inbox email" })).inboxEmail || "")
+    : String(args.inboxEmail || "");
+  if (!inboxEmail) throw new Error("inboxEmail required");
+
+  console.log("Starting Gmail OAuth for this inbox...");
+  const { refreshToken } = await obtainRefreshToken({ clientId, clientSecret, redirectUri });
+
+  const trelloApiKey = interactive
+    ? String((await prompts({ type: "password", name: "v", message: "Trello API key" })).v || "")
+    : String(args.trelloApiKey || "");
+  const trelloToken = interactive
+    ? String((await prompts({ type: "password", name: "v", message: "Trello token" })).v || "")
+    : String(args.trelloToken || "");
+  const boardId = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Trello board id" })).v || "")
+    : String(args.boardId || "");
+  const inboxListId = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Trello inbox list id" })).v || "")
+    : String(args.inboxListId || "");
+
+  const botToken = interactive
+    ? String((await prompts({ type: "password", name: "v", message: "Slack bot token (xoxb-...)" })).v || "")
+    : String(args.slackBotToken || "");
+  const channelId = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Slack channel id" })).v || "")
+    : String(args.slackChannelId || "");
+  const workspaceId = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Slack workspace id" })).v || "")
+    : String(args.slackWorkspaceId || "");
+
+  const extractionAddendum = interactive
+    ? await readMultiline("Extraction addendum")
+    : String(args.extractionAddendum || "");
+  const replySignature = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Reply signature (multi-line ok in quotes)" })).v || "")
+    : String(args.replySignature || "");
+  const replyToneNotes = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Reply tone notes" })).v || "")
+    : String(args.replyToneNotes || "");
+
+  const watchLabel = String(args.watchLabel || "INBOX");
+
+  await createProject(db, cfg.ENCRYPTION_KEY, {
+    id,
+    teamId,
+    name,
+    clientName,
+    gmail: {
+      inboxEmail,
+      clientId,
+      clientSecret,
+      refreshToken,
+      watchLabel,
+    },
+    trello: { apiKey: trelloApiKey, token: trelloToken, boardId, inboxListId },
+    slack: { botToken, channelId, workspaceId },
+    prompts: { extractionAddendum, replySignature, replyToneNotes },
+    learningEnabled: false,
+    dryRun: false,
+  });
+
+  writeProjectSkillFiles(repoRoot(), id, {
+    extractionAddendum,
+    replySignature,
+    replyToneNotes,
+  });
+  console.log(`Created project ${id} and wrote skill files under hermes/skills/projects/${id}/`);
+}
+
+async function cmdListProjects() {
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  const projects = await listProjects(db);
+  console.log(JSON.stringify(projects.map((p) => ({ id: p.id, name: p.name, teamId: p.teamId, active: p.active })), null, 2));
+}
+
+async function cmdDisableProject(argv: string[]) {
+  const id = argv[0];
+  if (!id) throw new Error("Usage: disable-project <id>");
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await setProjectActive(db, id, false);
+  console.log(`Disabled project ${id}`);
+}
+
+async function cmdDryRun(argv: string[]) {
+  const mode = argv[0];
+  if (mode !== "on" && mode !== "off") throw new Error("Usage: dry-run <on|off>");
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await setGlobalDryRunFlag(db, mode === "on");
+  console.log(`Global dry-run flag set to ${mode === "on"}`);
+}
+
+async function cmdDryRunProject(argv: string[]) {
+  const projectId = argv[0];
+  const mode = argv[1];
+  if (!projectId || (mode !== "on" && mode !== "off")) {
+    throw new Error("Usage: dry-run-project <projectId> <on|off>");
+  }
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await setProjectDryRun(db, projectId, mode === "on");
+  console.log(`Project ${projectId} dryRun=${mode === "on"}`);
+}
+
+async function cmdHookAudit() {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const body = JSON.parse(raw) as {
+    kind: AuditKind;
+    tool?: string;
+    input?: unknown;
+    output?: unknown;
+    durationMs?: number;
+    sessionId?: string;
+    hermesTurnId?: string;
+    projectId?: string;
+    threadId?: string;
+  };
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await writeAuditLog(db, body.kind || "hook", {
+    tool: body.tool,
+    input: body.input,
+    output: body.output,
+    durationMs: body.durationMs,
+    sessionId: body.sessionId,
+    hermesTurnId: body.hermesTurnId,
+    projectId: body.projectId,
+    threadId: body.threadId,
+  });
+}
+
+async function cmdSkillReview() {
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  const qs = await db
+    .collection(collections.skillReviewQueue)
+    .where("status", "==", "pending")
+    .orderBy("addedAt", "desc")
+    .limit(20)
+    .get()
+    .catch(async () => {
+      return await db.collection(collections.skillReviewQueue).limit(20).get();
+    });
+
+  const entries = qs.docs.map((d) => ({ id: d.id, ...(d.data() as object) }));
+  if (!entries.length) {
+    console.log("No pending skill review entries.");
+    return;
+  }
+  console.log(JSON.stringify(entries, null, 2));
+  const { action, id } = await prompts([
+    { type: "select", name: "action", message: "Action", choices: [
+      { title: "Approve (mark done)", value: "approve" },
+      { title: "Reject (revert file)", value: "reject" },
+      { title: "Quit", value: "quit" },
+    ]},
+    { type: "text", name: "id", message: "Entry id" },
+  ]);
+  if (action === "quit" || !id) return;
+  const doc = await db.collection(collections.skillReviewQueue).doc(String(id)).get();
+  if (!doc.exists) throw new Error("Unknown entry");
+  const data = doc.data() as { skillFile?: string; previousContent?: string; projectId?: string };
+  if (action === "approve") {
+    await doc.ref.update({ status: "approved" });
+    console.log("Marked approved.");
+    return;
+  }
+  if (action === "reject" && data.skillFile && data.previousContent !== undefined) {
+    const rel = String(data.skillFile).replace(/^skills\//, "");
+    const path = resolve(repoRoot(), "hermes", "skills", rel);
+    writeFileSync(path, data.previousContent, "utf8");
+    await doc.ref.update({ status: "rejected" });
+    console.log("Reverted skill file and marked rejected.");
+  }
+}
+
+async function cmdLearning(argv: string[]) {
+  const projectId = argv[0];
+  const mode = argv[1];
+  if (!projectId || (mode !== "on" && mode !== "off")) {
+    throw new Error("Usage: learning <projectId> <on|off>");
+  }
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await setLearningEnabled(db, projectId, mode === "on");
+  console.log(`Project ${projectId} learning.enabled=${mode === "on"}`);
+}
+
+async function cmdDecryptProjectField(projectId: string, field: string) {
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  const p = await getProject(db, projectId);
+  if (!p) throw new Error("Unknown project");
+  let enc: string | undefined;
+  if (field === "gmail.refreshToken") enc = p.gmail.refreshTokenEncrypted;
+  else if (field === "slack.botToken") enc = p.slack.botTokenEncrypted;
+  else throw new Error("Unsupported field for decrypt debug");
+  console.log(decrypt(enc, cfg.ENCRYPTION_KEY));
+}
+
+async function main() {
+  const [cmd, ...rest] = process.argv.slice(2);
+  if (!cmd) {
+    console.log(
+      "Commands: add-team | add-project | list-projects | list-teams | disable-project | dry-run | dry-run-project | learning | hook-audit | skill-review | decrypt-field"
+    );
+    process.exit(1);
+  }
+  switch (cmd) {
+    case "add-team":
+      await cmdAddTeam(rest);
+      break;
+    case "add-project":
+      await cmdAddProject(rest);
+      break;
+    case "list-projects":
+      await cmdListProjects();
+      break;
+    case "list-teams": {
+      const cfg = loadConfig();
+      const db = initFirebaseFromConfig(cfg);
+      console.log(JSON.stringify(await listTeams(db), null, 2));
+      break;
+    }
+    case "disable-project":
+      await cmdDisableProject(rest);
+      break;
+    case "dry-run":
+      await cmdDryRun(rest);
+      break;
+    case "dry-run-project":
+      await cmdDryRunProject(rest);
+      break;
+    case "learning":
+      await cmdLearning(rest);
+      break;
+    case "hook-audit":
+      await cmdHookAudit();
+      break;
+    case "skill-review":
+      await cmdSkillReview();
+      break;
+    case "decrypt-field":
+      await cmdDecryptProjectField(String(rest[0]), String(rest[1]));
+      break;
+    default:
+      throw new Error(`Unknown command: ${cmd}`);
+  }
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

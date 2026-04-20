@@ -1,0 +1,24 @@
+import type { Project } from "./types.js";
+
+export function redactProject(p: Project): Record<string, unknown> {
+  const clone = JSON.parse(JSON.stringify(p)) as Record<string, unknown>;
+  const g = clone.gmail as Record<string, string>;
+  if (g) {
+    for (const k of Object.keys(g)) {
+      if (k.endsWith("Encrypted")) g[k] = "[REDACTED]";
+    }
+  }
+  const t = clone.trello as Record<string, string>;
+  if (t) {
+    for (const k of Object.keys(t)) {
+      if (k.endsWith("Encrypted")) t[k] = "[REDACTED]";
+    }
+  }
+  const s = clone.slack as Record<string, string>;
+  if (s) {
+    for (const k of Object.keys(s)) {
+      if (k.endsWith("Encrypted")) s[k] = "[REDACTED]";
+    }
+  }
+  return clone;
+}

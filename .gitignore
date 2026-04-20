@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+*-firebase-adminsdk-*.json
+service-account*.json
+.hermes-local/
+hermes/dot-hermes/sessions/
+hermes/dot-hermes/logs/
+hermes/dot-hermes/cron/output/
