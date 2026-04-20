@@ -24,7 +24,10 @@ export const envSchema = z.object({
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1),
   ENCRYPTION_KEY: encryptionKeySchema,
   SLACK_SIGNING_SECRET: z.string().min(1),
-  ANTHROPIC_API_KEY: z.string().min(1),
+  /** Hermes / other tools; optional for this repo’s Node services (they do not call the LLM). */
+  ANTHROPIC_API_KEY: z.string().optional(),
+  /** Preferred when using Hermes with OpenRouter (see hermes/config.yaml `model`). */
+  OPENROUTER_API_KEY: z.string().optional(),
   GUARDRAIL_PORT: z.coerce.number().int().positive().default(8787),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   DRY_RUN: z
@@ -36,6 +39,8 @@ export const envSchema = z.object({
     .optional()
     .transform((v) => v === "true" || v === "1"),
   HR_HERMES_ROOT: z.string().optional(),
+  /** Required at runtime by `composio-gmail-mcp`; optional for other processes. */
+  COMPOSIO_API_KEY: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema> & {

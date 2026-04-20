@@ -1,5 +1,5 @@
 {
-  "name": "@hr-hermes/gmail-mcp",
+  "name": "@hr-hermes/composio-gmail-mcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,9 +7,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@composio/core": "^0.6.10",
     "@hr-hermes/shared": "*",
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "googleapis": "^144.0.0"
+    "@modelcontextprotocol/sdk": "^1.12.1"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

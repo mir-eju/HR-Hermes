@@ -7,6 +7,7 @@ export function redactProject(p: Project): Record<string, unknown> {
     for (const k of Object.keys(g)) {
       if (k.endsWith("Encrypted")) g[k] = "[REDACTED]";
     }
+    if (g.composioUserId) g.composioUserId = "[REDACTED]";
   }
   const t = clone.trello as Record<string, string>;
   if (t) {

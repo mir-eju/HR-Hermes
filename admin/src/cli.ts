@@ -15,7 +15,6 @@ import {
   setProjectDryRun,
 } from "./repos/projects.js";
 import { createTeam, getTeam, listTeams } from "./repos/teams.js";
-import { obtainRefreshToken } from "./gmailOAuth.js";
 import { writeProjectSkillFiles } from "./skillWriter.js";
 
 function repoRoot(): string {
@@ -88,20 +87,21 @@ async function cmdAddProject(argv: string[]) {
   const team = await getTeam(db, teamId);
   if (!team) throw new Error(`Unknown team: ${teamId}`);
 
-  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID || "";
-  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
-  if (!clientId || !clientSecret) {
-    throw new Error("Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET for Gmail OAuth");
-  }
-  const redirectUri =
-    process.env.GOOGLE_OAUTH_REDIRECT_URI || "http://127.0.0.1:3333/oauth2callback";
   const inboxEmail = interactive
-    ? String((await prompts({ type: "text", name: "inboxEmail", message: "Gmail inbox email" })).inboxEmail || "")
+    ? String((await prompts({ type: "text", name: "inboxEmail", message: "Gmail inbox email (for reference)" })).inboxEmail || "")
     : String(args.inboxEmail || "");
   if (!inboxEmail) throw new Error("inboxEmail required");
 
-  console.log("Starting Gmail OAuth for this inbox...");
-  const { refreshToken } = await obtainRefreshToken({ clientId, clientSecret, redirectUri });
+  const composioUserId = interactive
+    ? String(
+        (await prompts({
+          type: "text",
+          name: "composioUserId",
+          message: "Composio user id (connected Gmail in Composio)",
+        })).composioUserId || ""
+      )
+    : String(args.composioUserId || "");
+  if (!composioUserId.trim()) throw new Error("composioUserId required (connect Gmail in Composio first)");
 
   const trelloApiKey = interactive
     ? String((await prompts({ type: "password", name: "v", message: "Trello API key" })).v || "")
@@ -136,7 +136,16 @@ async function cmdAddProject(argv: string[]) {
     ? String((await prompts({ type: "text", name: "v", message: "Reply tone notes" })).v || "")
     : String(args.replyToneNotes || "");
 
-  const watchLabel = String(args.watchLabel || "INBOX");
+  const watchLabel = interactive
+    ? String(
+        (await prompts({
+          type: "text",
+          name: "watchLabel",
+          message: "Gmail label to watch (INBOX or label name)",
+          initial: "INBOX",
+        })).watchLabel || "INBOX"
+      )
+    : String(args.watchLabel || "INBOX");
 
   await createProject(db, cfg.ENCRYPTION_KEY, {
     id,
@@ -145,9 +154,7 @@ async function cmdAddProject(argv: string[]) {
     clientName,
     gmail: {
       inboxEmail,
-      clientId,
-      clientSecret,
-      refreshToken,
+      composioUserId: composioUserId.trim(),
       watchLabel,
     },
     trello: { apiKey: trelloApiKey, token: trelloToken, boardId, inboxListId },
@@ -296,9 +303,8 @@ async function cmdDecryptProjectField(projectId: string, field: string) {
   const p = await getProject(db, projectId);
   if (!p) throw new Error("Unknown project");
   let enc: string | undefined;
-  if (field === "gmail.refreshToken") enc = p.gmail.refreshTokenEncrypted;
-  else if (field === "slack.botToken") enc = p.slack.botTokenEncrypted;
-  else throw new Error("Unsupported field for decrypt debug");
+  if (field === "slack.botToken") enc = p.slack.botTokenEncrypted;
+  else throw new Error("Unsupported field for decrypt debug (gmail uses Composio; no refresh token stored)");
   console.log(decrypt(enc, cfg.ENCRYPTION_KEY));
 }
 

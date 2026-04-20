@@ -9,9 +9,7 @@ export interface CreateProjectPlaintext {
   clientName: string;
   gmail: {
     inboxEmail: string;
-    clientId: string;
-    clientSecret: string;
-    refreshToken: string;
+    composioUserId: string;
     watchLabel: string;
   };
   trello: {
@@ -30,12 +28,10 @@ export interface CreateProjectPlaintext {
   dryRun?: boolean;
 }
 
-function encryptGmail(p: CreateProjectPlaintext["gmail"], key: string): ProjectGmail {
+function buildGmail(p: CreateProjectPlaintext["gmail"]): ProjectGmail {
   return {
     inboxEmail: p.inboxEmail,
-    clientIdEncrypted: encrypt(p.clientId, key),
-    clientSecretEncrypted: encrypt(p.clientSecret, key),
-    refreshTokenEncrypted: encrypt(p.refreshToken, key),
+    composioUserId: p.composioUserId.trim(),
     watchLabel: p.watchLabel || "INBOX",
   };
 }
@@ -80,7 +76,7 @@ export async function createProject(
     active: true,
     createdAt: t as unknown as Project["createdAt"],
     updatedAt: t as unknown as Project["updatedAt"],
-    gmail: encryptGmail(input.gmail, encryptionKey),
+    gmail: buildGmail(input.gmail),
     trello: encryptTrello(input.trello, encryptionKey),
     slack: encryptSlack(input.slack, encryptionKey),
     prompts: input.prompts,
@@ -117,12 +113,23 @@ export async function updateProjectSecretField(
   db: Firestore,
   encryptionKey: string,
   projectId: string,
-  path: "gmail.refreshTokenEncrypted" | "gmail.clientIdEncrypted" | "trello.tokenEncrypted",
+  path: "trello.tokenEncrypted",
   plaintext: string
 ): Promise<void> {
   const enc = encrypt(plaintext, encryptionKey);
   const ref = db.collection(collections.projects).doc(projectId);
   await ref.update({ [path]: enc, updatedAt: now() });
+}
+
+export async function setProjectComposioUserId(
+  db: Firestore,
+  projectId: string,
+  composioUserId: string
+): Promise<void> {
+  await db
+    .collection(collections.projects)
+    .doc(projectId)
+    .update({ "gmail.composioUserId": composioUserId.trim(), updatedAt: now() });
 }
 
 export async function setProjectDryRun(db: Firestore, projectId: string, dryRun: boolean): Promise<void> {

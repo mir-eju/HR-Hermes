@@ -1,7 +1,9 @@
 # Copy or symlink this file into your Hermes home, or set HERMES_HOME to a directory that contains it.
 # Required: export HR_HERMES_ROOT to this repository root before starting Hermes so paths resolve.
+#
+# LLM: set OPENROUTER_API_KEY (e.g. in ~/.hermes/.env or your shell). Pick any OpenRouter model slug from https://openrouter.ai/models
 
-model: "anthropic/claude-sonnet-4-5-20250929"
+model: "anthropic/claude-sonnet-4"
 
 memory:
   memory_enabled: true
@@ -23,24 +25,25 @@ mcp_servers:
       FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
       GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
       LOG_LEVEL: "${LOG_LEVEL}"
       HR_HERMES_ROOT: "${HR_HERMES_ROOT}"
   gmail:
     command: "node"
     args:
-      - "${HR_HERMES_ROOT}/mcp-servers/gmail-mcp/dist/index.js"
+      - "${HR_HERMES_ROOT}/mcp-servers/composio-gmail-mcp/dist/index.js"
     env:
       FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID}"
       FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
       GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
       LOG_LEVEL: "${LOG_LEVEL}"
       HR_HERMES_ROOT: "${HR_HERMES_ROOT}"
       DRY_RUN: "${DRY_RUN}"
+      COMPOSIO_API_KEY: "${COMPOSIO_API_KEY}"
   trello:
     command: "node"
     args:
@@ -50,7 +53,7 @@ mcp_servers:
       FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
       GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
       LOG_LEVEL: "${LOG_LEVEL}"
       HR_HERMES_ROOT: "${HR_HERMES_ROOT}"
@@ -63,7 +66,7 @@ mcp_servers:
       FIREBASE_SERVICE_ACCOUNT_PATH: "${FIREBASE_SERVICE_ACCOUNT_PATH}"
       ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       SLACK_SIGNING_SECRET: "${SLACK_SIGNING_SECRET}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
       GUARDRAIL_PORT: "${GUARDRAIL_PORT}"
       LOG_LEVEL: "${LOG_LEVEL}"
       HR_HERMES_ROOT: "${HR_HERMES_ROOT}"

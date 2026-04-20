@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { Composio } from "@composio/core";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -17,9 +18,43 @@ import {
   writeAuditLog,
 } from "@hr-hermes/shared";
 import type { ApprovalToken, EmailThread, Project } from "@hr-hermes/shared";
-import { buildListQuery, extractPlainTextFromPayload, gmailClientForProject, headerMap } from "./gmail.js";
+import {
+  buildListQuery,
+  extractEmailFromFromHeader,
+  extractPlainTextFromPayload,
+  headerMap,
+  normalizeMessages,
+  unwrapComposioData,
+} from "./helpers.js";
 
-const service = "gmail-mcp";
+const service = "composio-gmail-mcp";
+
+let composioClient: Composio | null = null;
+
+function requireComposioKey(): string {
+  const k = process.env.COMPOSIO_API_KEY || "";
+  if (!k) throw new Error("COMPOSIO_API_KEY is required for Composio Gmail MCP");
+  return k;
+}
+
+function getComposio(): Composio {
+  if (!composioClient) composioClient = new Composio({ apiKey: requireComposioKey() });
+  return composioClient;
+}
+
+async function executeTool(
+  composioUserId: string,
+  slug: string,
+  arguments_: Record<string, unknown>
+): Promise<unknown> {
+  const c = getComposio();
+  const result = await c.tools.execute(slug, {
+    userId: composioUserId,
+    dangerouslySkipVersionCheck: true,
+    arguments: arguments_,
+  });
+  return result;
+}
 
 async function audit(
   db: Firestore,
@@ -59,6 +94,14 @@ async function setPollError(db: Firestore, projectId: string, message: string) {
   });
 }
 
+function pickMessageId(m: Record<string, unknown>): string {
+  return String(m.messageId ?? m.id ?? m.message_id ?? "");
+}
+
+function pickThreadId(m: Record<string, unknown>): string {
+  return String(m.threadId ?? m.thread_id ?? "");
+}
+
 function start() {
   const cfg = loadConfig();
   const db = initFirebaseFromConfig(cfg);
@@ -68,7 +111,8 @@ function start() {
     tools: [
       {
         name: "list_new_emails",
-        description: "List unread messages for a project inbox, upsert threads, mark read.",
+        description:
+          "List unread messages via Composio Gmail, upsert Firestore threads, mark read (remove UNREAD label).",
         inputSchema: {
           type: "object",
           properties: { projectId: { type: "string" } },
@@ -77,7 +121,7 @@ function start() {
       },
       {
         name: "fetch_message",
-        description: "Fetch a Gmail message by id for a project.",
+        description: "Fetch a Gmail message by id via Composio (GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID).",
         inputSchema: {
           type: "object",
           properties: {
@@ -89,7 +133,7 @@ function start() {
       },
       {
         name: "send_reply",
-        description: "Send a reply with approval token (enforced).",
+        description: "Send in-thread reply via Composio (GMAIL_REPLY_TO_THREAD) with approval token gate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -122,13 +166,28 @@ function start() {
           await audit(db, name, args, result, Date.now() - t0, projectId);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
+        const uid = project.gmail.composioUserId;
+        if (!uid) {
+          const msg = "project.gmail.composioUserId is missing";
+          await setPollError(db, projectId, msg);
+          result = { emails: [], error: msg };
+          await audit(db, name, args, result, Date.now() - t0, projectId);
+          return { content: [{ type: "text", text: JSON.stringify(result) }] };
+        }
         try {
-          const gmail = gmailClientForProject(project, cfg.ENCRYPTION_KEY);
+          requireComposioKey();
           const q = buildListQuery(project.gmail.watchLabel);
-          const list = await gmail.users.messages.list({ userId: "me", q, maxResults: 20 });
-          const ids = list.data.messages?.map((m) => m.id).filter(Boolean) as string[];
+          const raw = await executeTool(uid, "GMAIL_FETCH_EMAILS", {
+            query: q,
+            user_id: "me",
+            max_results: 20,
+            verbose: true,
+            include_payload: true,
+          });
+          const parsed = unwrapComposioData(raw);
+          const messages = normalizeMessages(parsed);
           const out: { threadId: string; summaryLine: string }[] = [];
-          if (!ids?.length) {
+          if (!messages.length) {
             await db.collection(collections.projects).doc(projectId).update({
               lastPolledAt: now(),
               lastPollError: null,
@@ -136,16 +195,21 @@ function start() {
             });
             result = { emails: [] };
           } else {
-            for (const messageId of ids) {
-              const full = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
-              const threadIdGmail = full.data.threadId || "";
-              if (!threadIdGmail) continue;
-              const headers = headerMap(full.data.payload?.headers);
-              const from = headers["from"] || "";
-              const subject = headers["subject"] || "";
+            for (const m of messages) {
+              const messageId = pickMessageId(m);
+              const threadIdGmail = pickThreadId(m);
+              if (!messageId || !threadIdGmail) continue;
+              let headers: Record<string, string> = {};
+              let body = "";
+              const payload = m.payload ?? m.messagePayload ?? m.mimePayload;
+              if (payload && typeof payload === "object") {
+                headers = headerMap((payload as { headers?: { name?: string; value?: string }[] }).headers);
+                body = extractPlainTextFromPayload(payload);
+              }
+              const from = headers["from"] || String(m.from ?? "");
+              const clientAddr = extractEmailFromFromHeader(from) || from;
+              const subject = headers["subject"] || String(m.subject ?? "");
               const messageIdHeader = headers["message-id"] || "";
-              const date = headers["date"] || "";
-              const body = extractPlainTextFromPayload(full.data.payload);
               const docId = makeThreadId(projectId, threadIdGmail);
               const ref = db.collection(collections.emailThreads).doc(docId);
               const snap = await ref.get();
@@ -159,11 +223,11 @@ function start() {
                 teamId: project.teamId,
                 projectId,
                 gmailThreadId: threadIdGmail,
-                clientEmail: from,
+                clientEmail: clientAddr,
                 clientName: from,
                 subject,
-                firstReceivedAt: prev?.firstReceivedAt || (now() as unknown as EmailThread["firstReceivedAt"]),
-                lastMessageAt: now() as unknown as EmailThread["lastMessageAt"],
+                firstReceivedAt: prev?.firstReceivedAt || now(),
+                lastMessageAt: now(),
                 rawEmail: body,
                 rawEmailHistory,
                 lastMessageIdHeader: messageIdHeader || prev?.lastMessageIdHeader,
@@ -171,20 +235,20 @@ function start() {
                 stateHistory:
                   prev?.stateHistory && prev.stateHistory.length
                     ? prev.stateHistory
-                    : ([
+                    : [
                         {
                           state: "received",
-                          at: now() as unknown as EmailThread["stateHistory"][number]["at"],
-                          by: "gmail-mcp",
+                          at: now(),
+                          by: "composio-gmail-mcp",
                           step: "list_new_emails",
                         },
-                      ] as EmailThread["stateHistory"]),
+                      ],
               };
               await ref.set(threadDoc, { merge: true });
-              await gmail.users.messages.modify({
-                userId: "me",
-                id: messageId,
-                requestBody: { removeLabelIds: ["UNREAD"] },
+              await executeTool(uid, "GMAIL_ADD_LABEL_TO_EMAIL", {
+                message_id: messageId,
+                user_id: "me",
+                remove_label_ids: ["UNREAD"],
               });
               out.push({
                 threadId: docId,
@@ -207,15 +271,23 @@ function start() {
         const projectId = String(args.projectId);
         const gmailMessageId = String(args.gmailMessageId);
         const project = await loadProject(db, projectId);
-        const gmail = gmailClientForProject(project, cfg.ENCRYPTION_KEY);
-        const full = await gmail.users.messages.get({ userId: "me", id: gmailMessageId, format: "full" });
-        result = full.data;
+        const uid = project.gmail.composioUserId;
+        if (!uid) throw new Error("project.gmail.composioUserId is missing");
+        requireComposioKey();
+        const raw = await executeTool(uid, "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
+          message_id: gmailMessageId,
+          user_id: "me",
+          format: "full",
+        });
+        result = unwrapComposioData(raw);
       } else if (name === "send_reply") {
         const projectId = String(args.projectId);
         const threadId = String(args.threadId);
         const replyText = String(args.replyText);
         const approvalToken = String(args.approvalToken);
         const project = await loadProject(db, projectId);
+        const uid = project.gmail.composioUserId;
+        if (!uid) throw new Error("project.gmail.composioUserId is missing");
         const threadRef = db.collection(collections.emailThreads).doc(threadId);
         const tokenRef = db.collection(collections.approvalTokens).doc(approvalToken);
         const dryRun = cfg.dryRun || project.dryRun === true;
@@ -249,10 +321,10 @@ function start() {
           if (tok.payloadHash !== payloadHash(threadId, replyText)) {
             throw new Error("approval: payloadHash mismatch");
           }
-
-          tx.update(tokenRef, { used: true, usedAt: now(), usedBy: "gmail-mcp" });
+          tx.update(tokenRef, { used: true, usedAt: now(), usedBy: "composio-gmail-mcp" });
         });
 
+        requireComposioKey();
         if (dryRunEffective) {
           await db.collection(collections.dryRunOutbox).doc(threadId).set({
             threadId,
@@ -262,29 +334,17 @@ function start() {
             dryRun: true,
           });
         } else {
-          const gmail = gmailClientForProject(project, cfg.ENCRYPTION_KEY);
-          const subjectBase = (thPre.subject || "").replace(/^\s*Re:\s*/i, "");
-          const subject = `Re: ${subjectBase}`;
-          const lines = [
-            `From: ${project.gmail.inboxEmail}`,
-            `To: ${thPre.clientEmail}`,
-            `Subject: ${subject}`,
-            `In-Reply-To: ${thPre.lastMessageIdHeader || ""}`,
-            `References: ${thPre.lastMessageIdHeader || ""}`,
-            "MIME-Version: 1.0",
-            "Content-Type: text/plain; charset=UTF-8",
-            "",
-            replyText,
-          ];
-          const raw = Buffer.from(lines.join("\r\n"), "utf8").toString("base64url");
-          await gmail.users.messages.send({
-            userId: "me",
-            requestBody: { raw, threadId: thPre.gmailThreadId },
+          const to = extractEmailFromFromHeader(thPre.clientEmail || "");
+          await executeTool(uid, "GMAIL_REPLY_TO_THREAD", {
+            thread_id: thPre.gmailThreadId,
+            message_body: replyText,
+            recipient_email: to,
+            user_id: "me",
           });
         }
 
         const hist = [...(thPre.stateHistory || [])];
-        hist.push({ state: "sent", at: now() as never, by: "gmail-mcp", step: "send_reply" });
+        hist.push({ state: "sent", at: now(), by: "composio-gmail-mcp", step: "send_reply" });
         await threadRef.set(
           {
             state: "sent",

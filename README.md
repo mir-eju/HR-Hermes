@@ -5,10 +5,10 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
 ## Prerequisites
 
 - **Node.js 20+**
-- **Hermes Agent** installed ([Hermes docs](https://hermes-agent.nousresearch.com/)) and a working **Anthropic** key in Hermes’ environment
+- **Hermes Agent** installed ([Hermes docs](https://hermes-agent.nousresearch.com/)) and **`OPENROUTER_API_KEY`** (recommended; [OpenRouter](https://openrouter.ai/) keys start with `sk-or-…`). Hermes loads secrets from **`~/.hermes/.env`** by default; export the same variable in your shell if you rely on `${OPENROUTER_API_KEY}` expansion in a copied [hermes/config.yaml](./hermes/config.yaml).
 - **Firebase** project with **Firestore** enabled
 - **GCP service account** JSON with Firestore access (server client, not end-user SDK)
-- **Google Cloud OAuth** client (Desktop or Web) with **Gmail API** enabled and authorized redirect `http://127.0.0.1:3333/oauth2callback` (or override via env)
+- **Composio** account with **Gmail** connected for each inbox; **`COMPOSIO_API_KEY`** in `.env` and per-project **Composio user id** stored via `add-project`
 - **Slack app** with bot token, signing secret, a channel for approvals, **Interactivity** pointing at your tunnel URL + `/slack/events`
 - **Trello** API key + token with access to the target board/list
 
@@ -47,6 +47,8 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
    mkdir -p "$HERMES_HOME"
    cp hermes/config.yaml "$HERMES_HOME/config.yaml"
    ```
+
+   In **`$HERMES_HOME/.env`** (or your shell when starting Hermes), set **`OPENROUTER_API_KEY`** so MCP subprocesses receive it via [hermes/config.yaml](./hermes/config.yaml). Set **`model`** in that `config.yaml` to any [OpenRouter model id](https://openrouter.ai/models) Hermes supports (this repo defaults to `anthropic/claude-sonnet-4`).
 
    Symlink skills so edits from `npm run admin -- add-project` land where Hermes loads them:
 
@@ -88,16 +90,16 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Absolute path to service account JSON |
 | `ENCRYPTION_KEY` | AES-256-GCM key for secrets at rest (64 hex or 32-byte base64) |
 | `SLACK_SIGNING_SECRET` | Verifies Slack requests to guardrail |
-| `ANTHROPIC_API_KEY` | Used by Hermes (also listed here so MCP child env can inherit) |
+| `OPENROUTER_API_KEY` | Used by Hermes with OpenRouter; passed to MCP children via `hermes/config.yaml` |
+| `ANTHROPIC_API_KEY` | Optional; only if you use direct Anthropic with Hermes instead of OpenRouter |
 | `GUARDRAIL_PORT` | Port for guardrail HTTP server |
 | `LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
 | `HR_HERMES_ROOT` | Absolute path to this repo (MCP `args` in `hermes/config.yaml`) |
-| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Gmail OAuth for `add-project` |
-| `GOOGLE_OAUTH_REDIRECT_URI` | Defaults to `http://127.0.0.1:3333/oauth2callback` |
-| `DRY_RUN` | When `true`, `send_reply` writes `dryRunOutbox` and skips Gmail API |
+| `COMPOSIO_API_KEY` | Composio API key (required by `composio-gmail-mcp` subprocess) |
+| `DRY_RUN` | When `true`, `send_reply` writes `dryRunOutbox` and skips sending mail |
 | `LEARNING_ENABLED` | Hint for skills; project `learning.enabled` still gates writes |
 
-Per-project **Slack**, **Trello**, and **Gmail** credentials are stored **encrypted** in Firestore via the admin CLI.
+Per-project **Slack** and **Trello** secrets are stored **encrypted** in Firestore; **Gmail** is accessed via Composio using a per-project **Composio user id** (plaintext) plus inbox/label metadata.
 
 ## Commands
 
@@ -105,7 +107,7 @@ Per-project **Slack**, **Trello**, and **Gmail** credentials are stored **encryp
 |---------|-------------|
 | `npm run build` | Build all workspaces (`shared`, MCPs, guardrail, admin) |
 | `npm run admin -- add-team --id <id> --name "Name"` | Create team |
-| `npm run admin -- add-project` | Interactive Gmail OAuth + secrets + writes `hermes/skills/projects/<id>/` |
+| `npm run admin -- add-project` | Interactive prompts (Composio user id, Trello, Slack, prompts) + writes `hermes/skills/projects/<id>/` |
 | `npm run admin -- list-projects` | List projects |
 | `npm run admin -- disable-project <id>` | Soft-disable a project |
 | `npm run admin -- dry-run on\|off` | Global dry-run flag in `_config/runtime` |
@@ -124,7 +126,7 @@ After `npm run build`, each server is at `mcp-servers/<name>/dist/index.js`. Her
 ## Safety model (short)
 
 - Only the **guardrail** mints `approvalTokens` after a verified Slack approval.
-- `gmail-mcp` **`send_reply`** consumes a token in a transaction, then sends (or dry-run outbox). `payloadHash` binds token to `threadId + replyText`.
+- `composio-gmail-mcp` (Hermes server key still **`gmail`**) **`send_reply`** consumes a token in a transaction, then sends via Composio (or dry-run outbox). `payloadHash` binds token to `threadId + replyText`.
 
 ## Learning (Step 12)
 

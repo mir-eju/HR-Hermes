@@ -33,9 +33,8 @@ export interface Team {
 
 export interface ProjectGmail {
   inboxEmail: string;
-  clientIdEncrypted: string;
-  clientSecretEncrypted: string;
-  refreshTokenEncrypted: string;
+  /** Composio entity id for the connected Gmail account (used with `COMPOSIO_API_KEY`). */
+  composioUserId: string;
   watchLabel: string;
 }
 
