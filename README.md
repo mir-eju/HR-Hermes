@@ -1,6 +1,6 @@
 # HR-Hermes (Phase 1)
 
-Multi-tenant **email → extraction → Trello → Slack approval → Gmail reply** pipeline with mechanical approval tokens (see [PHASE_1_PLAN (1).md](./PHASE_1_PLAN%20(1).md)). This repo implements the Node/Firestore/MCP/guardrail pieces and Hermes-facing config/skills. **Step 13 (VPS deploy) is intentionally out of scope** here; everything below is local-first.
+Multi-tenant **email → extraction → Trello → Slack and/or Telegram approval → Gmail reply** pipeline with mechanical approval tokens (see [PHASE_1_PLAN (1).md](./PHASE_1_PLAN%20(1).md)). This repo implements the Node/Firestore/MCP/guardrail pieces and Hermes-facing config/skills. **Step 13 (VPS deploy) is intentionally out of scope** here; everything below is local-first.
 
 ## Prerequisites
 
@@ -9,7 +9,8 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
 - **Firebase** project with **Firestore** enabled
 - **GCP service account** JSON with Firestore access (server client, not end-user SDK)
 - **Composio** account with **Gmail** connected for each inbox; **`COMPOSIO_API_KEY`** in `.env` and per-project **Composio user id** stored via `add-project`
-- **Slack app** with bot token, signing secret, a channel for approvals, **Interactivity** pointing at your tunnel URL + `/slack/events`
+- **Slack app** (optional until you wire it): bot token, signing secret, channel for approvals; **Interactivity** URL `https://<tunnel>/slack/events`
+- **Telegram bot** (optional for testing): @BotFather token, chat id; **webhook** `https://<tunnel>/telegram/webhook` with **`secret_token`** = `TELEGRAM_WEBHOOK_SECRET` in `.env`. Each Firestore project can have **Slack only**, **Telegram only**, or **both**; the intake skill prefers Telegram when `project.telegram` exists.
 - **Trello** API key + token with access to the target board/list
 
 ## One-time setup
@@ -64,7 +65,7 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
 
    The plugin shells out to `node admin/dist/cli.js hook-audit` with JSON on stdin, so **`npm run build` must succeed** and `HR_HERMES_ROOT` must be set when Hermes runs.
 
-7. **Slack → guardrail**: Slack interactivity must hit a **public HTTPS** URL. For local dev use **Cloudflare Tunnel** or **ngrok** to expose `http://127.0.0.1:$GUARDRAIL_PORT`, e.g.:
+7. **Guardrail (Slack + Telegram)**: Expose `http://127.0.0.1:$GUARDRAIL_PORT` on **HTTPS** (Cloudflare Tunnel / ngrok), e.g.:
 
    ```bash
    npm run build
@@ -72,7 +73,14 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
    # elsewhere: cloudflared tunnel --url http://127.0.0.1:8787
    ```
 
-   Set the Slack app **Interactivity** URL to `https://<your-tunnel-host>/slack/events`.
+   - **Slack:** set the app **Interactivity** URL to `https://<tunnel>/slack/events` and set `SLACK_SIGNING_SECRET` in `.env`.
+   - **Telegram:** register the webhook (`secret_token` must match `TELEGRAM_WEBHOOK_SECRET`):
+
+   ```bash
+   curl -sS "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+     -d "url=https://<your-tunnel-host>/telegram/webhook" \
+     -d "secret_token=<same-as-TELEGRAM_WEBHOOK_SECRET>"
+   ```
 
 8. **Cron / gateway**: Hermes schedules recurring work via `hermes cron` / gateway (see Hermes docs). After MCPs work in chat, create a job equivalent to:
 
@@ -89,7 +97,8 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
 | `FIREBASE_PROJECT_ID` | GCP / Firebase project id |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | Absolute path to service account JSON |
 | `ENCRYPTION_KEY` | AES-256-GCM key for secrets at rest (64 hex or 32-byte base64) |
-| `SLACK_SIGNING_SECRET` | Verifies Slack requests to guardrail |
+| `SLACK_SIGNING_SECRET` | Verifies Slack requests to `/slack/events` (omit if not using Slack yet) |
+| `TELEGRAM_WEBHOOK_SECRET` | Verifies Telegram `X-Telegram-Bot-Api-Secret-Token` on `/telegram/webhook` (omit if not using Telegram) |
 | `OPENROUTER_API_KEY` | Used by Hermes with OpenRouter; passed to MCP children via `hermes/config.yaml` |
 | `ANTHROPIC_API_KEY` | Optional; only if you use direct Anthropic with Hermes instead of OpenRouter |
 | `GUARDRAIL_PORT` | Port for guardrail HTTP server |
@@ -99,7 +108,7 @@ Multi-tenant **email → extraction → Trello → Slack approval → Gmail repl
 | `DRY_RUN` | When `true`, `send_reply` writes `dryRunOutbox` and skips sending mail |
 | `LEARNING_ENABLED` | Hint for skills; project `learning.enabled` still gates writes |
 
-Per-project **Slack** and **Trello** secrets are stored **encrypted** in Firestore; **Gmail** is accessed via Composio using a per-project **Composio user id** (plaintext) plus inbox/label metadata.
+Per-project **Slack** and/or **Telegram** (bot tokens) and **Trello** secrets are stored **encrypted** in Firestore; **Gmail** is accessed via Composio using a per-project **Composio user id** (plaintext) plus inbox/label metadata.
 
 ## Commands
 
@@ -107,7 +116,7 @@ Per-project **Slack** and **Trello** secrets are stored **encrypted** in Firesto
 |---------|-------------|
 | `npm run build` | Build all workspaces (`shared`, MCPs, guardrail, admin) |
 | `npm run admin -- add-team --id <id> --name "Name"` | Create team |
-| `npm run admin -- add-project` | Interactive prompts (Composio user id, Trello, Slack, prompts) + writes `hermes/skills/projects/<id>/` |
+| `npm run admin -- add-project` | Interactive prompts (Composio, Trello, optional Slack and/or Telegram, prompts) + writes `hermes/skills/projects/<id>/` |
 | `npm run admin -- list-projects` | List projects |
 | `npm run admin -- disable-project <id>` | Soft-disable a project |
 | `npm run admin -- dry-run on\|off` | Global dry-run flag in `_config/runtime` |
@@ -125,7 +134,7 @@ After `npm run build`, each server is at `mcp-servers/<name>/dist/index.js`. Her
 
 ## Safety model (short)
 
-- Only the **guardrail** mints `approvalTokens` after a verified Slack approval.
+- Only the **guardrail** mints `approvalTokens` after a verified **Slack** or **Telegram** approval action.
 - `composio-gmail-mcp` (Hermes server key still **`gmail`**) **`send_reply`** consumes a token in a transaction, then sends via Composio (or dry-run outbox). `payloadHash` binds token to `threadId + replyText`.
 
 ## Learning (Step 12)

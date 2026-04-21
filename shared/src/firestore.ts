@@ -45,6 +45,7 @@ export const collections = {
   dryRunOutbox: "dryRunOutbox",
   skillReviewQueue: "skillReviewQueue",
   healthcheck: "_healthcheck",
+  telegramCallbackRoutes: "telegramCallbackRoutes",
 } as const;
 
 export { FieldValue, getFirestore, Timestamp };

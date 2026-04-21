@@ -15,10 +15,16 @@ export function redactProject(p: Project): Record<string, unknown> {
       if (k.endsWith("Encrypted")) t[k] = "[REDACTED]";
     }
   }
-  const s = clone.slack as Record<string, string>;
+  const s = clone.slack as Record<string, string> | undefined;
   if (s) {
     for (const k of Object.keys(s)) {
       if (k.endsWith("Encrypted")) s[k] = "[REDACTED]";
+    }
+  }
+  const tg = clone.telegram as Record<string, string> | undefined;
+  if (tg) {
+    for (const k of Object.keys(tg)) {
+      if (k.endsWith("Encrypted")) tg[k] = "[REDACTED]";
     }
   }
   return clone;

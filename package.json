@@ -22,5 +22,11 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.71",
+    "@composio/core": "^0.6.10",
+    "@composio/vercel": "^0.6.10",
+    "ai": "^6.0.168"
   }
 }

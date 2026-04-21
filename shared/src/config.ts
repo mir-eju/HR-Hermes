@@ -23,7 +23,10 @@ export const envSchema = z.object({
   FIREBASE_PROJECT_ID: z.string().min(1),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1),
   ENCRYPTION_KEY: encryptionKeySchema,
-  SLACK_SIGNING_SECRET: z.string().min(1),
+  /** Guardrail `/slack/events` — omit if you only use Telegram for now. */
+  SLACK_SIGNING_SECRET: z.string().min(1).optional(),
+  /** Guardrail `/telegram/webhook` — omit if you only use Slack for now. */
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(1).optional(),
   /** Hermes / other tools; optional for this repo’s Node services (they do not call the LLM). */
   ANTHROPIC_API_KEY: z.string().optional(),
   /** Preferred when using Hermes with OpenRouter (see hermes/config.yaml `model`). */

@@ -1,6 +1,15 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { collections, encrypt, now } from "@hr-hermes/shared";
-import type { Project, ProjectGmail, ProjectLearning, ProjectPrompts, ProjectSkills, ProjectSlack, ProjectTrello } from "@hr-hermes/shared";
+import type {
+  Project,
+  ProjectGmail,
+  ProjectLearning,
+  ProjectPrompts,
+  ProjectSkills,
+  ProjectSlack,
+  ProjectTelegram,
+  ProjectTrello,
+} from "@hr-hermes/shared";
 
 export interface CreateProjectPlaintext {
   id: string;
@@ -18,10 +27,14 @@ export interface CreateProjectPlaintext {
     boardId: string;
     inboxListId: string;
   };
-  slack: {
+  slack?: {
     botToken: string;
     channelId: string;
     workspaceId: string;
+  };
+  telegram?: {
+    botToken: string;
+    chatId: string;
   };
   prompts: ProjectPrompts;
   learningEnabled?: boolean;
@@ -45,11 +58,18 @@ function encryptTrello(p: CreateProjectPlaintext["trello"], key: string): Projec
   };
 }
 
-function encryptSlack(p: CreateProjectPlaintext["slack"], key: string): ProjectSlack {
+function encryptSlack(p: NonNullable<CreateProjectPlaintext["slack"]>, key: string): ProjectSlack {
   return {
     botTokenEncrypted: encrypt(p.botToken, key),
     channelId: p.channelId,
     workspaceId: p.workspaceId,
+  };
+}
+
+function encryptTelegram(p: NonNullable<CreateProjectPlaintext["telegram"]>, key: string): ProjectTelegram {
+  return {
+    botTokenEncrypted: encrypt(p.botToken, key),
+    chatId: p.chatId.trim(),
   };
 }
 
@@ -58,6 +78,9 @@ export async function createProject(
   encryptionKey: string,
   input: CreateProjectPlaintext
 ): Promise<void> {
+  if (!input.slack && !input.telegram) {
+    throw new Error("Configure at least one of: slack (bot + channel) or telegram (bot + chat id)");
+  }
   const ref = db.collection(collections.projects).doc(input.id);
   if ((await ref.get()).exists) {
     throw new Error(`Project already exists: ${input.id}`);
@@ -78,7 +101,6 @@ export async function createProject(
     updatedAt: t as unknown as Project["updatedAt"],
     gmail: buildGmail(input.gmail),
     trello: encryptTrello(input.trello, encryptionKey),
-    slack: encryptSlack(input.slack, encryptionKey),
     prompts: input.prompts,
     skills,
     learning,
@@ -86,6 +108,8 @@ export async function createProject(
     lastPolledAt: null,
     lastPollError: null,
   };
+  if (input.slack) project.slack = encryptSlack(input.slack, encryptionKey);
+  if (input.telegram) project.telegram = encryptTelegram(input.telegram, encryptionKey);
   await ref.set(project);
 }
 

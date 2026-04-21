@@ -45,10 +45,18 @@ export interface ProjectTrello {
   inboxListId: string;
 }
 
+/** Slack app for approvals (optional if you use Telegram only). */
 export interface ProjectSlack {
   botTokenEncrypted: string;
   channelId: string;
   workspaceId: string;
+}
+
+/** Telegram bot for approvals (optional if you use Slack only). */
+export interface ProjectTelegram {
+  botTokenEncrypted: string;
+  /** Numeric chat id or @channelusername for approvals (same bot must be a member). */
+  chatId: string;
 }
 
 export interface ProjectPrompts {
@@ -76,7 +84,8 @@ export interface Project {
   updatedAt: FirebaseTimestamp;
   gmail: ProjectGmail;
   trello: ProjectTrello;
-  slack: ProjectSlack;
+  slack?: ProjectSlack;
+  telegram?: ProjectTelegram;
   prompts: ProjectPrompts;
   skills: ProjectSkills;
   learning?: ProjectLearning;
@@ -139,6 +148,11 @@ export interface EmailThread {
   sentReply?: string;
   slackMessageTs?: string;
   slackChannelId?: string;
+  /** Telegram approval message id (string for Firestore). */
+  telegramMessageId?: string;
+  telegramChatId?: string;
+  /** User is sending a replacement draft after clicking Edit. */
+  awaitingTelegramEdit?: boolean;
   approvedBy?: string;
   errors?: ThreadError[];
   humanEdits?: HumanEdits;

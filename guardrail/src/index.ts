@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomBytes, randomUUID, createHash } from "node:crypto";
 import express from "express";
 import { WebClient } from "@slack/web-api";
 import {
@@ -7,6 +7,7 @@ import {
   initFirebaseFromConfig,
   loadConfig,
   now,
+  telegramApi,
   Timestamp,
   writeAuditLog,
 } from "@hr-hermes/shared";
@@ -17,7 +18,38 @@ function payloadHash(threadId: string, replyText: string): string {
   return createHash("sha256").update(threadId, "utf8").update(replyText, "utf8").digest("hex");
 }
 
-function buildApprovalBlocks(opts: {
+function newNonce(): string {
+  return randomBytes(8).toString("hex");
+}
+
+function approvalKeyboard(nonce: string) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "Approve", callback_data: `apr:${nonce}` },
+        { text: "Reject", callback_data: `rej:${nonce}` },
+        { text: "Edit", callback_data: `edt:${nonce}` },
+      ],
+    ],
+  };
+}
+
+function buildTelegramApprovalText(opts: {
+  trelloCardUrl: string;
+  extraction: unknown;
+  draftedReply: string;
+}): string {
+  const ex = JSON.stringify(opts.extraction, null, 2).slice(0, 3500);
+  const draft = opts.draftedReply.slice(0, 3500);
+  return (
+    `Client reply approval\n\n` +
+    `Trello: ${opts.trelloCardUrl}\n\n` +
+    `Extraction:\n${ex}\n\n` +
+    `Draft reply:\n${draft}`
+  );
+}
+
+function buildSlackApprovalBlocks(opts: {
   projectId: string;
   threadId: string;
   extraction: unknown;
@@ -67,6 +99,26 @@ function buildApprovalBlocks(opts: {
   ];
 }
 
+function verifyTelegramSecret(
+  cfg: ReturnType<typeof loadConfig>,
+  req: express.Request
+): void {
+  const secret = cfg.TELEGRAM_WEBHOOK_SECRET;
+  if (!secret) throw new Error("telegram webhook not configured");
+  const got = String(req.headers["x-telegram-bot-api-secret-token"] || "");
+  if (got !== secret) throw new Error("invalid telegram webhook secret");
+}
+
+async function answerTelegramCb(
+  botToken: string,
+  id: string,
+  text?: string
+): Promise<void> {
+  const body: Record<string, unknown> = { callback_query_id: id };
+  if (text) body.text = text.slice(0, 200);
+  await telegramApi(botToken, "answerCallbackQuery", body);
+}
+
 async function main() {
   const cfg = loadConfig();
   const db = initFirebaseFromConfig(cfg);
@@ -78,6 +130,9 @@ async function main() {
     "/slack/events",
     express.raw({ type: () => true, limit: "2mb" }),
     (req, res) => {
+      if (!cfg.SLACK_SIGNING_SECRET) {
+        return res.status(503).send("slack signing not configured");
+      }
       const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body as ArrayBuffer);
       const ctype = String(req.headers["content-type"] || "");
 
@@ -115,11 +170,11 @@ async function main() {
         };
 
         if (payload.type === "view_submission" && payload.view?.callback_id === "hermes_edit_reply") {
-          void handleViewSubmission(cfg, db, payload).catch((e) => console.error(e));
+          void handleSlackViewSubmission(cfg, db, payload).catch((e) => console.error(e));
           return res.status(200).json({ response_action: "clear" });
         }
 
-        void handleBlockActions(cfg, db, payload).catch((e) => console.error(e));
+        void handleSlackBlockActions(cfg, db, payload).catch((e) => console.error(e));
         return res.status(200).json({ response_type: "ephemeral", text: "✅ received, processing..." });
       }
 
@@ -127,12 +182,41 @@ async function main() {
     }
   );
 
+  app.post("/telegram/webhook", express.json({ limit: "2mb" }), (req, res) => {
+    try {
+      verifyTelegramSecret(cfg, req);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("not configured")) return res.status(503).send(msg);
+      return res.status(401).send("unauthorized");
+    }
+
+    const update = req.body as {
+      callback_query?: {
+        id: string;
+        data?: string;
+        from?: { id: number };
+        message?: { chat?: { id: number }; message_id?: number };
+      };
+      message?: {
+        message_id?: number;
+        chat?: { id: number };
+        from?: { is_bot?: boolean; id?: number };
+        text?: string;
+        reply_to_message?: { message_id?: number };
+      };
+    };
+
+    void handleTelegramUpdate(cfg, db, update).catch((e) => console.error(e));
+    return res.sendStatus(200);
+  });
+
   app.listen(cfg.GUARDRAIL_PORT, () => {
     console.log(JSON.stringify({ service: "guardrail", port: cfg.GUARDRAIL_PORT }));
   });
 }
 
-async function handleViewSubmission(
+async function handleSlackViewSubmission(
   cfg: ReturnType<typeof loadConfig>,
   db: ReturnType<typeof initFirebaseFromConfig>,
   payload: {
@@ -166,11 +250,12 @@ async function handleViewSubmission(
   );
   const projectSnap = await db.collection(collections.projects).doc(meta.projectId).get();
   const project = projectSnap.data() as Project;
+  if (!project.slack) return;
   const token = decrypt(project.slack.botTokenEncrypted, cfg.ENCRYPTION_KEY);
   const client = new WebClient(token);
   const extraction = th.extraction || {};
   const trello = th.trelloCardUrl || "";
-  const blocks = buildApprovalBlocks({
+  const blocks = buildSlackApprovalBlocks({
     projectId: meta.projectId,
     threadId: meta.threadId,
     extraction,
@@ -192,7 +277,7 @@ async function handleViewSubmission(
   });
 }
 
-async function handleBlockActions(
+async function handleSlackBlockActions(
   cfg: ReturnType<typeof loadConfig>,
   db: ReturnType<typeof initFirebaseFromConfig>,
   payload: {
@@ -212,6 +297,7 @@ async function handleBlockActions(
   const th = thSnap.data() as EmailThread;
   const projectSnap = await db.collection(collections.projects).doc(projectId).get();
   const project = projectSnap.data() as Project;
+  if (!project.slack) return;
   const slackToken = decrypt(project.slack.botTokenEncrypted, cfg.ENCRYPTION_KEY);
   const client = new WebClient(slackToken);
 
@@ -320,6 +406,257 @@ async function handleBlockActions(
       consumed: false,
     });
   }
+}
+
+async function handleTelegramUpdate(
+  cfg: ReturnType<typeof loadConfig>,
+  db: ReturnType<typeof initFirebaseFromConfig>,
+  update: {
+    callback_query?: {
+      id: string;
+      data?: string;
+      from?: { id: number };
+      message?: { chat?: { id: number }; message_id?: number };
+    };
+    message?: {
+      message_id?: number;
+      chat?: { id: number };
+      from?: { is_bot?: boolean; id?: number };
+      text?: string;
+      reply_to_message?: { message_id?: number };
+    };
+  }
+) {
+  if (update.callback_query) {
+    await handleTelegramCallback(cfg, db, update.callback_query);
+    return;
+  }
+  if (update.message?.text && update.message.reply_to_message?.message_id != null) {
+    await handleTelegramReplyDraft(cfg, db, update.message);
+  }
+}
+
+async function handleTelegramCallback(
+  cfg: ReturnType<typeof loadConfig>,
+  db: ReturnType<typeof initFirebaseFromConfig>,
+  cq: {
+    id: string;
+    data?: string;
+    from?: { id: number };
+    message?: { chat?: { id: number }; message_id?: number };
+  }
+) {
+  const raw = cq.data || "";
+  const colon = raw.indexOf(":");
+  if (colon <= 0) return;
+  const kind = raw.slice(0, colon);
+  const nonce = raw.slice(colon + 1);
+  if (!nonce || (kind !== "apr" && kind !== "rej" && kind !== "edt")) return;
+
+  const routeSnap = await db.collection(collections.telegramCallbackRoutes).doc(nonce).get();
+  if (!routeSnap.exists) return;
+  const route = routeSnap.data() as { threadId: string; projectId: string };
+  const { threadId, projectId } = route;
+  const threadRef = db.collection(collections.emailThreads).doc(threadId);
+  const thSnap = await threadRef.get();
+  if (!thSnap.exists) {
+    await routeSnap.ref.delete();
+    return;
+  }
+  const th = thSnap.data() as EmailThread;
+  const projectSnap = await db.collection(collections.projects).doc(projectId).get();
+  if (!projectSnap.exists) {
+    await routeSnap.ref.delete();
+    return;
+  }
+  const project = projectSnap.data() as Project;
+  if (!project.telegram) {
+    await routeSnap.ref.delete();
+    return;
+  }
+  const botToken = decrypt(project.telegram.botTokenEncrypted, cfg.ENCRYPTION_KEY);
+  const userId = cq.from?.id != null ? String(cq.from.id) : "unknown";
+
+  try {
+    if (kind === "apr") {
+      const replyText = th.editedReply || th.draftedReply || "";
+      if (!replyText) {
+        await answerTelegramCb(botToken, cq.id, "No draft reply on thread.");
+        await routeSnap.ref.delete();
+        return;
+      }
+      const tokenId = randomUUID();
+      const hash = payloadHash(threadId, replyText);
+      await db
+        .collection(collections.approvalTokens)
+        .doc(tokenId)
+        .set({
+          id: tokenId,
+          threadId,
+          projectId,
+          kind: "send_reply",
+          payloadHash: hash,
+          issuedAt: now(),
+          expiresAt: Timestamp.fromMillis(Date.now() + 10 * 60 * 1000),
+          used: false,
+          issuedBy: userId,
+        });
+      await writeAuditLog(db, "approval_issued", {
+        projectId,
+        threadId,
+        tool: "guardrail",
+        input: { tokenId },
+      });
+      await db.collection(collections.approvalSignals).doc(threadId).set({
+        projectId,
+        threadId,
+        action: "approved",
+        tokenId,
+        userId,
+        at: now(),
+        consumed: false,
+      });
+      if (th.telegramChatId && th.telegramMessageId) {
+        await telegramApi(botToken, "editMessageText", {
+          chat_id: th.telegramChatId,
+          message_id: Number(th.telegramMessageId),
+          text: `Approved by user ${userId} — sending…`,
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+      await routeSnap.ref.delete();
+      await answerTelegramCb(botToken, cq.id);
+      return;
+    }
+
+    if (kind === "rej") {
+      await db.collection(collections.approvalSignals).doc(threadId).set({
+        projectId,
+        threadId,
+        action: "rejected",
+        userId,
+        at: now(),
+        consumed: false,
+      });
+      await threadRef.set({ state: "rejected" }, { merge: true });
+      if (th.telegramChatId && th.telegramMessageId) {
+        await telegramApi(botToken, "editMessageText", {
+          chat_id: th.telegramChatId,
+          message_id: Number(th.telegramMessageId),
+          text: `Rejected by user ${userId}`,
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+      await routeSnap.ref.delete();
+      await answerTelegramCb(botToken, cq.id);
+      return;
+    }
+
+    if (kind === "edt") {
+      await threadRef.set({ awaitingTelegramEdit: true }, { merge: true });
+      await db.collection(collections.approvalSignals).doc(threadId).set({
+        projectId,
+        threadId,
+        action: "edit_reply",
+        userId,
+        at: now(),
+        consumed: false,
+      });
+      await answerTelegramCb(
+        botToken,
+        cq.id,
+        "Reply to the approval message with your full replacement draft."
+      );
+      await routeSnap.ref.delete();
+    }
+  } catch (e) {
+    console.error(e);
+    try {
+      await answerTelegramCb(botToken, cq.id, e instanceof Error ? e.message : "Error");
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function handleTelegramReplyDraft(
+  cfg: ReturnType<typeof loadConfig>,
+  db: ReturnType<typeof initFirebaseFromConfig>,
+  message: {
+    message_id?: number;
+    chat?: { id: number };
+    from?: { is_bot?: boolean; id?: number };
+    text?: string;
+    reply_to_message?: { message_id?: number };
+  }
+) {
+  if (message.from?.is_bot) return;
+  const text = (message.text || "").trim();
+  if (!text) return;
+  const chatId = message.chat?.id;
+  const replyToId = message.reply_to_message?.message_id;
+  if (chatId == null || replyToId == null) return;
+
+  const qs = await db
+    .collection(collections.emailThreads)
+    .where("telegramChatId", "==", String(chatId))
+    .where("telegramMessageId", "==", String(replyToId))
+    .where("awaitingTelegramEdit", "==", true)
+    .limit(1)
+    .get();
+  if (qs.empty) return;
+
+  const doc = qs.docs[0];
+  const th = doc.data() as EmailThread;
+  const projectId = th.projectId;
+  const projectSnap = await db.collection(collections.projects).doc(projectId).get();
+  if (!projectSnap.exists) return;
+  const project = projectSnap.data() as Project;
+  if (!project.telegram) return;
+  const botToken = decrypt(project.telegram.botTokenEncrypted, cfg.ENCRYPTION_KEY);
+  const before = th.draftedReply || "";
+
+  await doc.ref.set(
+    {
+      editedReply: text,
+      awaitingTelegramEdit: false,
+      humanEdits: {
+        ...(th.humanEdits || {}),
+        replyBefore: before,
+        replyAfter: text,
+      },
+    },
+    { merge: true }
+  );
+
+  const nonce = newNonce();
+  await db
+    .collection(collections.telegramCallbackRoutes)
+    .doc(nonce)
+    .set({ threadId: doc.id, projectId, createdAt: now() });
+
+  const th2 = { ...th, editedReply: text };
+  const body = buildTelegramApprovalText({
+    trelloCardUrl: th2.trelloCardUrl || "",
+    extraction: th2.extraction || {},
+    draftedReply: text,
+  });
+
+  await telegramApi(botToken, "editMessageText", {
+    chat_id: th.telegramChatId,
+    message_id: Number(th.telegramMessageId),
+    text: body,
+    reply_markup: approvalKeyboard(nonce),
+  });
+
+  await db.collection(collections.approvalSignals).doc(doc.id).set({
+    projectId,
+    threadId: doc.id,
+    action: "edited",
+    userId: message.from?.id != null ? String(message.from.id) : "telegram",
+    at: now(),
+    consumed: false,
+  });
 }
 
 void main();

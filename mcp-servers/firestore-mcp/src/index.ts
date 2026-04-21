@@ -137,7 +137,7 @@ function start() {
       },
       {
         name: "list_approval_signals",
-        description: "List unconsumed Slack approval signals for a project.",
+        description: "List unconsumed approval signals for a project (Telegram-driven guardrail).",
         inputSchema: {
           type: "object",
           properties: { projectId: { type: "string" } },

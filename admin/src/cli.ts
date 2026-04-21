@@ -116,15 +116,42 @@ async function cmdAddProject(argv: string[]) {
     ? String((await prompts({ type: "text", name: "v", message: "Trello inbox list id" })).v || "")
     : String(args.inboxListId || "");
 
-  const botToken = interactive
-    ? String((await prompts({ type: "password", name: "v", message: "Slack bot token (xoxb-...)" })).v || "")
+  const slackBotToken = interactive
+    ? String(
+        (await prompts({ type: "password", name: "v", message: "Slack bot token (xoxb-…) — Enter to skip" })).v || ""
+      )
     : String(args.slackBotToken || "");
-  const channelId = interactive
-    ? String((await prompts({ type: "text", name: "v", message: "Slack channel id" })).v || "")
+  const slackChannelId = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Slack channel id — Enter to skip" })).v || "")
     : String(args.slackChannelId || "");
-  const workspaceId = interactive
-    ? String((await prompts({ type: "text", name: "v", message: "Slack workspace id" })).v || "")
+  const slackWorkspaceId = interactive
+    ? String((await prompts({ type: "text", name: "v", message: "Slack workspace id — Enter to skip" })).v || "")
     : String(args.slackWorkspaceId || "");
+
+  const telegramBotToken = interactive
+    ? String(
+        (await prompts({
+          type: "password",
+          name: "v",
+          message: "Telegram bot token (@BotFather) — Enter to skip if using Slack only",
+        })).v || ""
+      )
+    : String(args.telegramBotToken || "");
+  const telegramChatId = interactive
+    ? String(
+        (await prompts({
+          type: "text",
+          name: "v",
+          message: "Telegram chat id — Enter to skip (DM/group id from getUpdates)",
+        })).v || ""
+      )
+    : String(args.telegramChatId || "");
+
+  const hasSlack = Boolean(slackBotToken && slackChannelId.trim() && slackWorkspaceId.trim());
+  const hasTelegram = Boolean(telegramBotToken && telegramChatId.trim());
+  if (!hasSlack && !hasTelegram) {
+    throw new Error("Provide Slack (bot + channel + workspace) and/or Telegram (bot + chat id)");
+  }
 
   const extractionAddendum = interactive
     ? await readMultiline("Extraction addendum")
@@ -158,7 +185,18 @@ async function cmdAddProject(argv: string[]) {
       watchLabel,
     },
     trello: { apiKey: trelloApiKey, token: trelloToken, boardId, inboxListId },
-    slack: { botToken, channelId, workspaceId },
+    ...(hasSlack
+      ? {
+          slack: {
+            botToken: slackBotToken,
+            channelId: slackChannelId.trim(),
+            workspaceId: slackWorkspaceId.trim(),
+          },
+        }
+      : {}),
+    ...(hasTelegram
+      ? { telegram: { botToken: telegramBotToken, chatId: telegramChatId.trim() } }
+      : {}),
     prompts: { extractionAddendum, replySignature, replyToneNotes },
     learningEnabled: false,
     dryRun: false,
@@ -303,8 +341,10 @@ async function cmdDecryptProjectField(projectId: string, field: string) {
   const p = await getProject(db, projectId);
   if (!p) throw new Error("Unknown project");
   let enc: string | undefined;
-  if (field === "slack.botToken") enc = p.slack.botTokenEncrypted;
-  else throw new Error("Unsupported field for decrypt debug (gmail uses Composio; no refresh token stored)");
+  if (field === "slack.botToken") enc = p.slack?.botTokenEncrypted;
+  else if (field === "telegram.botToken") enc = p.telegram?.botTokenEncrypted;
+  else throw new Error("Unsupported field (use slack.botToken or telegram.botToken)");
+  if (!enc) throw new Error("Field not set on this project");
   console.log(decrypt(enc, cfg.ENCRYPTION_KEY));
 }
 

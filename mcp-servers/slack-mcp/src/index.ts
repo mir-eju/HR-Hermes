@@ -43,6 +43,7 @@ async function loadActiveProject(db: Firestore, projectId: string): Promise<Proj
   if (!snap.exists) throw new Error(`Unknown project: ${projectId}`);
   const p = snap.data() as Project;
   if (!p.active) throw new Error(`Inactive project: ${projectId}`);
+  if (!p.slack) throw new Error("project.slack is not configured");
   return p;
 }
 
@@ -55,7 +56,7 @@ function start() {
     tools: [
       {
         name: "post_approval_message",
-        description: "Post Slack approval UI for a thread.",
+        description: "Post Slack approval UI for a thread (requires project.slack).",
         inputSchema: {
           type: "object",
           properties: {
@@ -111,7 +112,7 @@ function start() {
         const draftedReply = String(args.draftedReply);
         const trelloCardUrl = String(args.trelloCardUrl);
         const project = await loadActiveProject(db, projectId);
-        const token = decrypt(project.slack.botTokenEncrypted, cfg.ENCRYPTION_KEY);
+        const token = decrypt(project.slack!.botTokenEncrypted, cfg.ENCRYPTION_KEY);
         const client = new WebClient(token);
         const value = JSON.stringify({ projectId, threadId });
         const blocks = [
@@ -155,7 +156,7 @@ function start() {
           },
         ];
         const post = await client.chat.postMessage({
-          channel: project.slack.channelId,
+          channel: project.slack!.channelId,
           text: "Approval needed for client reply",
           blocks,
         });
@@ -165,21 +166,21 @@ function start() {
           .set(
             {
               slackMessageTs: post.ts,
-              slackChannelId: project.slack.channelId,
+              slackChannelId: project.slack!.channelId,
             },
             { merge: true }
           );
-        result = { ts: post.ts, channel: project.slack.channelId };
+        result = { ts: post.ts, channel: project.slack!.channelId };
       } else if (name === "update_message") {
         const projectId = String(args.projectId);
         const channelId = String(args.channelId);
         const ts = String(args.ts);
         const blocks = args.blocks as unknown[];
         const project = await loadActiveProject(db, projectId);
-        if (channelId !== project.slack.channelId) {
+        if (channelId !== project.slack!.channelId) {
           throw new Error("Refusing to update Slack message outside project channel");
         }
-        const token = decrypt(project.slack.botTokenEncrypted, cfg.ENCRYPTION_KEY);
+        const token = decrypt(project.slack!.botTokenEncrypted, cfg.ENCRYPTION_KEY);
         const client = new WebClient(token);
         await client.chat.update({ channel: channelId, ts, blocks: blocks as never, text: "Updated" });
         result = { ok: true };
@@ -190,7 +191,7 @@ function start() {
         let token = "";
         if (projectIdHint) {
           const project = await loadActiveProject(db, projectIdHint);
-          token = decrypt(project.slack.botTokenEncrypted, cfg.ENCRYPTION_KEY);
+          token = decrypt(project.slack!.botTokenEncrypted, cfg.ENCRYPTION_KEY);
         } else {
           throw new Error("open_modal requires projectIdHint until trigger routing is added");
         }

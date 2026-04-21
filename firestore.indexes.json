@@ -31,6 +31,15 @@
         { "fieldPath": "projectId", "order": "ASCENDING" },
         { "fieldPath": "consumed", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "emailThreads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "telegramChatId", "order": "ASCENDING" },
+        { "fieldPath": "telegramMessageId", "order": "ASCENDING" },
+        { "fieldPath": "awaitingTelegramEdit", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
