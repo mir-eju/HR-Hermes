@@ -9,3 +9,4 @@ service-account*.json
 hermes/dot-hermes/sessions/
 hermes/dot-hermes/logs/
 hermes/dot-hermes/cron/output/
+firebase_key.json
