@@ -12,7 +12,12 @@ import {
   setGlobalDryRunFlag,
   setLearningEnabled,
   setProjectActive,
+  setProjectClientName,
   setProjectDryRun,
+  updateProjectGmailSettings,
+  updateProjectSlackSettings,
+  updateProjectTelegramSettings,
+  updateProjectTrelloCredentials,
 } from "./repos/projects.js";
 import { createTeam, getTeam, listTeams } from "./repos/teams.js";
 import { writeProjectSkillFiles } from "./skillWriter.js";
@@ -97,11 +102,22 @@ async function cmdAddProject(argv: string[]) {
         (await prompts({
           type: "text",
           name: "composioUserId",
-          message: "Composio user id (connected Gmail in Composio)",
+          message:
+            "Composio entity user_id (end-user id), not Gmail address and not ac_/ca_ connection id",
         })).composioUserId || ""
       )
     : String(args.composioUserId || "");
   if (!composioUserId.trim()) throw new Error("composioUserId required (connect Gmail in Composio first)");
+
+  const composioConnectedAccountId = interactive
+    ? String(
+        (await prompts({
+          type: "text",
+          name: "composioConnectedAccountId",
+          message: "Composio connected-account id (ac_…) — Enter to skip",
+        })).composioConnectedAccountId || ""
+      )
+    : String(args.composioConnectedAccountId || "");
 
   const trelloApiKey = interactive
     ? String((await prompts({ type: "password", name: "v", message: "Trello API key" })).v || "")
@@ -182,6 +198,9 @@ async function cmdAddProject(argv: string[]) {
     gmail: {
       inboxEmail,
       composioUserId: composioUserId.trim(),
+      ...(composioConnectedAccountId.trim()
+        ? { composioConnectedAccountId: composioConnectedAccountId.trim() }
+        : {}),
       watchLabel,
     },
     trello: { apiKey: trelloApiKey, token: trelloToken, boardId, inboxListId },
@@ -348,11 +367,115 @@ async function cmdDecryptProjectField(projectId: string, field: string) {
   console.log(decrypt(enc, cfg.ENCRYPTION_KEY));
 }
 
+async function cmdUpdateProjectGmail(argv: string[]) {
+  const args = parseArgs(argv);
+  const projectId = String(args.id || args.projectId || "");
+  if (!projectId) {
+    throw new Error(
+      "Usage: update-project-gmail --id <projectId> [--composioUserId <id>] [--composioConnectedAccountId <ac_…>] [--inboxEmail <email>] [--watchLabel <label>]\n" +
+        "  At least one of composioUserId, composioConnectedAccountId, inboxEmail, watchLabel is required.\n" +
+        "  composioUserId = Composio entity user_id; composioConnectedAccountId = optional ac_… row id."
+    );
+  }
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  const patch: {
+    composioUserId?: string;
+    composioConnectedAccountId?: string | null;
+    inboxEmail?: string;
+    watchLabel?: string;
+  } = {};
+  if (args.composioUserId) patch.composioUserId = String(args.composioUserId);
+  if (args.composioConnectedAccountId !== undefined) {
+    patch.composioConnectedAccountId =
+      args.composioConnectedAccountId === true ? null : String(args.composioConnectedAccountId);
+  }
+  if (args.inboxEmail) patch.inboxEmail = String(args.inboxEmail);
+  if (args.watchLabel) patch.watchLabel = String(args.watchLabel);
+  await updateProjectGmailSettings(db, projectId, patch);
+  console.log(`Updated gmail settings on project ${projectId}`);
+}
+
+async function cmdUpdateProjectTrello(argv: string[]) {
+  const args = parseArgs(argv);
+  const projectId = String(args.id || args.projectId || "");
+  if (!projectId) {
+    throw new Error(
+      "Usage: update-project-trello --id <projectId> [--apiKey <key>] [--token <token>] [--boardId <id>] [--inboxListId <id>]\n" +
+        "  At least one flag required. apiKey/token are encrypted with ENCRYPTION_KEY before Firestore update."
+    );
+  }
+  const patch: {
+    apiKey?: string;
+    token?: string;
+    boardId?: string;
+    inboxListId?: string;
+  } = {};
+  if (args.apiKey) patch.apiKey = String(args.apiKey);
+  if (args.token) patch.token = String(args.token);
+  if (args.boardId) patch.boardId = String(args.boardId);
+  if (args.inboxListId) patch.inboxListId = String(args.inboxListId);
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await updateProjectTrelloCredentials(db, cfg.ENCRYPTION_KEY, projectId, patch);
+  console.log(`Updated Trello credentials/settings on project ${projectId}`);
+}
+
+async function cmdUpdateProjectTelegram(argv: string[]) {
+  const args = parseArgs(argv);
+  const projectId = String(args.id || args.projectId || "");
+  if (!projectId) {
+    throw new Error(
+      "Usage: update-project-telegram --id <projectId> [--botToken <token>] [--chatId <id>]\n" +
+        "  At least one flag required. chatId must be a user DM or group (not another bot). First-time telegram needs both flags."
+    );
+  }
+  const patch: { botToken?: string; chatId?: string } = {};
+  if (args.botToken) patch.botToken = String(args.botToken);
+  if (args.chatId) patch.chatId = String(args.chatId);
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await updateProjectTelegramSettings(db, cfg.ENCRYPTION_KEY, projectId, patch);
+  console.log(`Updated Telegram settings on project ${projectId}`);
+}
+
+async function cmdUpdateProjectSlack(argv: string[]) {
+  const args = parseArgs(argv);
+  const projectId = String(args.id || args.projectId || "");
+  if (!projectId) {
+    throw new Error(
+      "Usage: update-project-slack --id <projectId> [--botToken <xoxb-…>] [--channelId <id>] [--workspaceId <id>]\n" +
+        "  At least one flag required. First-time slack needs all three flags."
+    );
+  }
+  const patch: { botToken?: string; channelId?: string; workspaceId?: string } = {};
+  if (args.botToken) patch.botToken = String(args.botToken);
+  if (args.channelId) patch.channelId = String(args.channelId);
+  if (args.workspaceId) patch.workspaceId = String(args.workspaceId);
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await updateProjectSlackSettings(db, cfg.ENCRYPTION_KEY, projectId, patch);
+  console.log(`Updated Slack settings on project ${projectId}`);
+}
+
+async function cmdSetClientName(argv: string[]) {
+  const args = parseArgs(argv);
+  const projectId = String(args.id || args.projectId || "");
+  const clientName = String(args.name || args.clientName || "");
+  if (!projectId || !clientName) {
+    throw new Error("Usage: set-client-name --id <projectId> --name \"Client display name\"");
+  }
+  const cfg = loadConfig();
+  const db = initFirebaseFromConfig(cfg);
+  await setProjectClientName(db, projectId, clientName);
+  console.log(`Updated clientName on project ${projectId}`);
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd) {
     console.log(
-      "Commands: add-team | add-project | list-projects | list-teams | disable-project | dry-run | dry-run-project | learning | hook-audit | skill-review | decrypt-field"
+      "Commands: add-team | add-project | list-projects | list-teams | disable-project | dry-run | dry-run-project | learning | hook-audit | skill-review | decrypt-field | update-project-gmail | update-project-trello | update-project-telegram | update-project-slack | set-client-name"
     );
     process.exit(1);
   }
@@ -392,6 +515,21 @@ async function main() {
       break;
     case "decrypt-field":
       await cmdDecryptProjectField(String(rest[0]), String(rest[1]));
+      break;
+    case "update-project-gmail":
+      await cmdUpdateProjectGmail(rest);
+      break;
+    case "update-project-trello":
+      await cmdUpdateProjectTrello(rest);
+      break;
+    case "update-project-telegram":
+      await cmdUpdateProjectTelegram(rest);
+      break;
+    case "update-project-slack":
+      await cmdUpdateProjectSlack(rest);
+      break;
+    case "set-client-name":
+      await cmdSetClientName(rest);
       break;
     default:
       throw new Error(`Unknown command: ${cmd}`);

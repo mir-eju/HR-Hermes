@@ -1,4 +1,4 @@
-import type { Firestore } from "firebase-admin/firestore";
+import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { collections, encrypt, now } from "@hr-hermes/shared";
 import type {
   Project,
@@ -19,6 +19,7 @@ export interface CreateProjectPlaintext {
   gmail: {
     inboxEmail: string;
     composioUserId: string;
+    composioConnectedAccountId?: string;
     watchLabel: string;
   };
   trello: {
@@ -42,9 +43,11 @@ export interface CreateProjectPlaintext {
 }
 
 function buildGmail(p: CreateProjectPlaintext["gmail"]): ProjectGmail {
+  const composioConnectedAccountId = p.composioConnectedAccountId?.trim();
   return {
     inboxEmail: p.inboxEmail,
     composioUserId: p.composioUserId.trim(),
+    ...(composioConnectedAccountId ? { composioConnectedAccountId } : {}),
     watchLabel: p.watchLabel || "INBOX",
   };
 }
@@ -133,16 +136,84 @@ export async function setProjectActive(db: Firestore, id: string, active: boolea
   await db.collection(collections.projects).doc(id).update({ active, updatedAt: now() });
 }
 
-export async function updateProjectSecretField(
+/** Rotate Trello API key / token (encrypted) and/or board ids (plaintext). */
+export async function updateProjectTrelloCredentials(
   db: Firestore,
   encryptionKey: string,
   projectId: string,
-  path: "trello.tokenEncrypted",
-  plaintext: string
+  patch: { apiKey?: string; token?: string; boardId?: string; inboxListId?: string }
 ): Promise<void> {
-  const enc = encrypt(plaintext, encryptionKey);
   const ref = db.collection(collections.projects).doc(projectId);
-  await ref.update({ [path]: enc, updatedAt: now() });
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`Unknown project: ${projectId}`);
+  const updates: Record<string, unknown> = { updatedAt: now() };
+  if (patch.apiKey !== undefined) {
+    updates["trello.apiKeyEncrypted"] = encrypt(patch.apiKey.trim(), encryptionKey);
+  }
+  if (patch.token !== undefined) {
+    updates["trello.tokenEncrypted"] = encrypt(patch.token.trim(), encryptionKey);
+  }
+  if (patch.boardId !== undefined) updates["trello.boardId"] = patch.boardId.trim();
+  if (patch.inboxListId !== undefined) updates["trello.inboxListId"] = patch.inboxListId.trim();
+  const keys = Object.keys(updates).filter((k) => k !== "updatedAt");
+  if (!keys.length) throw new Error("Provide at least one of: apiKey, token, boardId, inboxListId");
+  await ref.update(updates);
+}
+
+/** Rotate Telegram bot token (encrypted) and/or approvals chat id. */
+export async function updateProjectTelegramSettings(
+  db: Firestore,
+  encryptionKey: string,
+  projectId: string,
+  patch: { botToken?: string; chatId?: string }
+): Promise<void> {
+  const ref = db.collection(collections.projects).doc(projectId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`Unknown project: ${projectId}`);
+  const p = snap.data() as Project;
+  const hadTelegram = Boolean(p.telegram);
+  const updates: Record<string, unknown> = { updatedAt: now() };
+  if (patch.botToken !== undefined) {
+    updates["telegram.botTokenEncrypted"] = encrypt(patch.botToken.trim(), encryptionKey);
+  }
+  if (patch.chatId !== undefined) {
+    updates["telegram.chatId"] = patch.chatId.trim();
+  }
+  const keys = Object.keys(updates).filter((k) => k !== "updatedAt");
+  if (!keys.length) throw new Error("Provide at least one of: botToken, chatId");
+  if (!hadTelegram && (patch.botToken === undefined || patch.chatId === undefined)) {
+    throw new Error("Project has no telegram yet: pass both --botToken and --chatId");
+  }
+  await ref.update(updates);
+}
+
+/** Rotate Slack bot token (encrypted) and/or channel / workspace ids. */
+export async function updateProjectSlackSettings(
+  db: Firestore,
+  encryptionKey: string,
+  projectId: string,
+  patch: { botToken?: string; channelId?: string; workspaceId?: string }
+): Promise<void> {
+  const ref = db.collection(collections.projects).doc(projectId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`Unknown project: ${projectId}`);
+  const p = snap.data() as Project;
+  const hadSlack = Boolean(p.slack);
+  const updates: Record<string, unknown> = { updatedAt: now() };
+  if (patch.botToken !== undefined) {
+    updates["slack.botTokenEncrypted"] = encrypt(patch.botToken.trim(), encryptionKey);
+  }
+  if (patch.channelId !== undefined) updates["slack.channelId"] = patch.channelId.trim();
+  if (patch.workspaceId !== undefined) updates["slack.workspaceId"] = patch.workspaceId.trim();
+  const keys = Object.keys(updates).filter((k) => k !== "updatedAt");
+  if (!keys.length) throw new Error("Provide at least one of: botToken, channelId, workspaceId");
+  if (
+    !hadSlack &&
+    (patch.botToken === undefined || patch.channelId === undefined || patch.workspaceId === undefined)
+  ) {
+    throw new Error("Project has no slack yet: pass --botToken, --channelId, and --workspaceId");
+  }
+  await ref.update(updates);
 }
 
 export async function setProjectComposioUserId(
@@ -154,6 +225,48 @@ export async function setProjectComposioUserId(
     .collection(collections.projects)
     .doc(projectId)
     .update({ "gmail.composioUserId": composioUserId.trim(), updatedAt: now() });
+}
+
+export async function setProjectClientName(db: Firestore, projectId: string, clientName: string): Promise<void> {
+  const ref = db.collection(collections.projects).doc(projectId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`Unknown project: ${projectId}`);
+  await ref.update({ clientName: clientName.trim(), updatedAt: now() });
+}
+
+/** Patch plaintext Gmail metadata on the project (Composio identity + labels). */
+export async function updateProjectGmailSettings(
+  db: Firestore,
+  projectId: string,
+  patch: {
+    composioUserId?: string;
+    composioConnectedAccountId?: string | null;
+    inboxEmail?: string;
+    watchLabel?: string;
+  }
+): Promise<void> {
+  const ref = db.collection(collections.projects).doc(projectId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`Unknown project: ${projectId}`);
+  const updates: Record<string, unknown> = { updatedAt: now() };
+  if (patch.composioUserId !== undefined) updates["gmail.composioUserId"] = patch.composioUserId.trim();
+  if (patch.composioConnectedAccountId !== undefined) {
+    const v = patch.composioConnectedAccountId;
+    if (v === null || (typeof v === "string" && !v.trim())) {
+      updates["gmail.composioConnectedAccountId"] = FieldValue.delete();
+    } else {
+      updates["gmail.composioConnectedAccountId"] = String(v).trim();
+    }
+  }
+  if (patch.inboxEmail !== undefined) updates["gmail.inboxEmail"] = patch.inboxEmail.trim();
+  if (patch.watchLabel !== undefined) updates["gmail.watchLabel"] = patch.watchLabel.trim();
+  const keys = Object.keys(updates).filter((k) => k !== "updatedAt");
+  if (!keys.length) {
+    throw new Error(
+      "Provide at least one of: composioUserId, composioConnectedAccountId, inboxEmail, watchLabel"
+    );
+  }
+  await ref.update(updates);
 }
 
 export async function setProjectDryRun(db: Firestore, projectId: string, dryRun: boolean): Promise<void> {

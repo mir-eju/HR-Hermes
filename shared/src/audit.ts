@@ -2,6 +2,15 @@ import type { Firestore } from "firebase-admin/firestore";
 import type { AuditKind, AuditLogEntry } from "./types.js";
 import { collections, now } from "./firestore.js";
 
+/** Firestore rejects `undefined` anywhere in a document; drop top-level undefined keys. */
+function omitUndefinedTopLevel(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 export async function writeAuditLog(
   db: Firestore,
   kind: AuditKind,
@@ -14,6 +23,6 @@ export async function writeAuditLog(
     kind,
     ...payload,
   };
-  await ref.set(entry);
+  await ref.set(omitUndefinedTopLevel(entry));
   return ref.id;
 }

@@ -17,6 +17,11 @@ privacy:
 cron:
   wrap_response: false
 
+# Scan HR-Hermes skill markdown (global + per-project) alongside bundled Hermes skills.
+skills:
+  external_dirs:
+    - "${HR_HERMES_ROOT}/hermes/skills"
+
 mcp_servers:
   firestore:
     command: "node"

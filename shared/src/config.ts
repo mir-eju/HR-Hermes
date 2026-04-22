@@ -19,14 +19,20 @@ const base64Key = z.string().refine((s) => {
 
 const encryptionKeySchema = z.union([hexKey, base64Key]);
 
+/** `.env` often sets `KEY=` (empty); treat as unset so `.optional()` works with `min(1)`. */
+const optionalNonEmpty = z.preprocess(
+  (v) => (v === "" || v === undefined || v === null ? undefined : v),
+  z.string().min(1).optional()
+);
+
 export const envSchema = z.object({
   FIREBASE_PROJECT_ID: z.string().min(1),
   FIREBASE_SERVICE_ACCOUNT_PATH: z.string().min(1),
   ENCRYPTION_KEY: encryptionKeySchema,
   /** Guardrail `/slack/events` — omit if you only use Telegram for now. */
-  SLACK_SIGNING_SECRET: z.string().min(1).optional(),
+  SLACK_SIGNING_SECRET: optionalNonEmpty,
   /** Guardrail `/telegram/webhook` — omit if you only use Slack for now. */
-  TELEGRAM_WEBHOOK_SECRET: z.string().min(1).optional(),
+  TELEGRAM_WEBHOOK_SECRET: optionalNonEmpty,
   /** Hermes / other tools; optional for this repo’s Node services (they do not call the LLM). */
   ANTHROPIC_API_KEY: z.string().optional(),
   /** Preferred when using Hermes with OpenRouter (see hermes/config.yaml `model`). */

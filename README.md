@@ -57,6 +57,10 @@ Multi-tenant **email → extraction → Trello → Slack and/or Telegram approva
    ln -sfn "$HR_HERMES_ROOT/hermes/skills" "$HERMES_HOME/skills"
    ```
 
+   Alternatively, the repo [hermes/config.yaml](./hermes/config.yaml) sets `skills.external_dirs` to `${HR_HERMES_ROOT}/hermes/skills`, so bundled Hermes skills and HR-Hermes skills can coexist without replacing `$HERMES_HOME/skills`. A launcher that exports `HR_HERMES_ROOT` correctly is [scripts/hermes-hr-hermes.sh](./scripts/hermes-hr-hermes.sh) (`chmod +x` then `./scripts/hermes-hr-hermes.sh`).
+
+   One-shot intake (non-interactive Hermes; enables MCP toolsets): [scripts/run-intake-once.sh](./scripts/run-intake-once.sh) (`chmod +x` then `./scripts/run-intake-once.sh`).
+
 6. **Audit plugin (Step 10)**: copy the plugin into Hermes’ plugin scan path (exact location depends on your Hermes version; often `~/.hermes/plugins/`):
 
    ```bash
@@ -123,6 +127,11 @@ Per-project **Slack** and/or **Telegram** (bot tokens) and **Trello** secrets ar
 | `npm run admin -- dry-run-project <id> on\|off` | Per-project dry-run |
 | `npm run admin -- learning <id> on\|off` | Toggle `learning.enabled` on a project |
 | `npm run admin -- skill-review` | Triage `skillReviewQueue` entries |
+| `npm run admin -- update-project-gmail --id <projectId> [--composioUserId …] [--inboxEmail …] [--watchLabel …]` | Update Gmail/Composio metadata (at least one flag required) |
+| `npm run admin -- update-project-trello --id <projectId> [--apiKey …] [--token …] [--boardId …] [--inboxListId …]` | Rotate Trello key/token (encrypted) and/or board ids (at least one flag) |
+| `npm run admin -- update-project-telegram --id <projectId> [--botToken …] [--chatId …]` | Rotate Telegram bot token and/or approvals `chatId` (first-time needs both) |
+| `npm run admin -- update-project-slack --id <projectId> [--botToken …] [--channelId …] [--workspaceId …]` | Rotate Slack bot token and/or channel/workspace ids (first-time needs all three) |
+| `npm run admin -- set-client-name --id <projectId> --name "…"` | Change Firestore `clientName` |
 | `npm run verify-isolation` | Sanity-check thread id prefixes vs `projectId` |
 | `npm run poll-trello-edits` | Heuristic poll: Trello card description vs stored extraction |
 | `node guardrail/dist/index.js` | Run guardrail after `npm run build` |

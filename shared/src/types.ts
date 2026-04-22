@@ -33,8 +33,13 @@ export interface Team {
 
 export interface ProjectGmail {
   inboxEmail: string;
-  /** Composio entity id for the connected Gmail account (used with `COMPOSIO_API_KEY`). */
+  /**
+   * Composio **end-user / entity** id (the `user_id` you pass to tool execution), not the Gmail address
+   * and not the connected-account row id (`ac_…`). Wrong value → "no connected account" from Composio.
+   */
   composioUserId: string;
+  /** Optional Composio connected-account id when you need a specific Gmail link (multi-account or API requires it). */
+  composioConnectedAccountId?: string;
   watchLabel: string;
 }
 

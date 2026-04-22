@@ -9,15 +9,15 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "admin": "ts-node --transpile-only admin/src/cli.ts",
-    "guardrail": "ts-node --transpile-only guardrail/src/index.ts",
-    "verify-isolation": "ts-node --transpile-only admin/src/verifyIsolation.ts",
-    "poll-trello-edits": "ts-node --transpile-only admin/src/pollTrelloEdits.ts",
+    "admin": "tsx admin/src/cli.ts",
+    "guardrail": "tsx guardrail/src/index.ts",
+    "verify-isolation": "tsx admin/src/verifyIsolation.ts",
+    "poll-trello-edits": "tsx admin/src/pollTrelloEdits.ts",
     "hook-audit": "node admin/dist/cli.js hook-audit"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
-    "ts-node": "^10.9.2",
+    "tsx": "^4.19.3",
     "typescript": "^5.7.2"
   },
   "engines": {

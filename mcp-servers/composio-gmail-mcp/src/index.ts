@@ -22,8 +22,11 @@ import {
   buildListQuery,
   extractEmailFromFromHeader,
   extractPlainTextFromPayload,
+  formatComposioExecutionError,
   headerMap,
   normalizeMessages,
+  peekComposioListPayload,
+  responseShapeHint,
   unwrapComposioData,
 } from "./helpers.js";
 
@@ -42,14 +45,24 @@ function getComposio(): Composio {
   return composioClient;
 }
 
+function composioExecuteOpts(project: Project): { userId: string; connectedAccountId?: string } {
+  const userId = project.gmail.composioUserId;
+  const ca = project.gmail.composioConnectedAccountId;
+  const connectedAccountId =
+    typeof ca === "string" && ca.trim() ? ca.trim() : undefined;
+  return connectedAccountId ? { userId, connectedAccountId } : { userId };
+}
+
 async function executeTool(
-  composioUserId: string,
   slug: string,
-  arguments_: Record<string, unknown>
+  arguments_: Record<string, unknown>,
+  project: Project
 ): Promise<unknown> {
   const c = getComposio();
+  const { userId, connectedAccountId } = composioExecuteOpts(project);
   const result = await c.tools.execute(slug, {
-    userId: composioUserId,
+    userId,
+    ...(connectedAccountId ? { connectedAccountId } : {}),
     dangerouslySkipVersionCheck: true,
     arguments: arguments_,
   });
@@ -95,10 +108,22 @@ async function setPollError(db: Firestore, projectId: string, message: string) {
 }
 
 function pickMessageId(m: Record<string, unknown>): string {
+  const nested = m.message;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const msg = nested as Record<string, unknown>;
+    const id = msg.id ?? msg.messageId ?? msg.message_id;
+    if (id) return String(id);
+  }
   return String(m.messageId ?? m.id ?? m.message_id ?? "");
 }
 
 function pickThreadId(m: Record<string, unknown>): string {
+  const nested = m.message;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const msg = nested as Record<string, unknown>;
+    const tid = msg.threadId ?? msg.thread_id;
+    if (tid) return String(tid);
+  }
   return String(m.threadId ?? m.thread_id ?? "");
 }
 
@@ -166,8 +191,7 @@ function start() {
           await audit(db, name, args, result, Date.now() - t0, projectId);
           return { content: [{ type: "text", text: JSON.stringify(result) }] };
         }
-        const uid = project.gmail.composioUserId;
-        if (!uid) {
+        if (!project.gmail.composioUserId?.trim()) {
           const msg = "project.gmail.composioUserId is missing";
           await setPollError(db, projectId, msg);
           result = { emails: [], error: msg };
@@ -177,23 +201,27 @@ function start() {
         try {
           requireComposioKey();
           const q = buildListQuery(project.gmail.watchLabel);
-          const raw = await executeTool(uid, "GMAIL_FETCH_EMAILS", {
+          const raw = await executeTool("GMAIL_FETCH_EMAILS", {
             query: q,
             user_id: "me",
             max_results: 20,
             verbose: true,
             include_payload: true,
-          });
-          const parsed = unwrapComposioData(raw);
-          const messages = normalizeMessages(parsed);
+          }, project);
+          const messages = normalizeMessages(raw);
           const out: { threadId: string; summaryLine: string }[] = [];
+          const polledMeta = {
+            polledQuery: q,
+            unreadScope: (process.env.GMAIL_LIST_UNREAD_SCOPE || "rolling1d").trim(),
+            ...responseShapeHint(peekComposioListPayload(raw)),
+          };
           if (!messages.length) {
             await db.collection(collections.projects).doc(projectId).update({
               lastPolledAt: now(),
               lastPollError: null,
               updatedAt: now(),
             });
-            result = { emails: [] };
+            result = { emails: [], ...polledMeta };
           } else {
             for (const m of messages) {
               const messageId = pickMessageId(m);
@@ -245,11 +273,11 @@ function start() {
                       ],
               };
               await ref.set(threadDoc, { merge: true });
-              await executeTool(uid, "GMAIL_ADD_LABEL_TO_EMAIL", {
+              await executeTool("GMAIL_ADD_LABEL_TO_EMAIL", {
                 message_id: messageId,
                 user_id: "me",
                 remove_label_ids: ["UNREAD"],
-              });
+              }, project);
               out.push({
                 threadId: docId,
                 summaryLine: `${subject} — ${from}`.slice(0, 500),
@@ -260,10 +288,17 @@ function start() {
               lastPollError: null,
               updatedAt: now(),
             });
-            result = { emails: out };
+            result =
+              out.length > 0
+                ? { emails: out }
+                : {
+                    emails: [],
+                    ...polledMeta,
+                    hint: "Parsed messages from Gmail but skipped all (missing message id or thread id).",
+                  };
           }
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
+          const msg = formatComposioExecutionError(e);
           await setPollError(db, projectId, msg);
           result = { emails: [], error: msg };
         }
@@ -271,14 +306,13 @@ function start() {
         const projectId = String(args.projectId);
         const gmailMessageId = String(args.gmailMessageId);
         const project = await loadProject(db, projectId);
-        const uid = project.gmail.composioUserId;
-        if (!uid) throw new Error("project.gmail.composioUserId is missing");
+        if (!project.gmail.composioUserId?.trim()) throw new Error("project.gmail.composioUserId is missing");
         requireComposioKey();
-        const raw = await executeTool(uid, "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
+        const raw = await executeTool("GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID", {
           message_id: gmailMessageId,
           user_id: "me",
           format: "full",
-        });
+        }, project);
         result = unwrapComposioData(raw);
       } else if (name === "send_reply") {
         const projectId = String(args.projectId);
@@ -286,8 +320,7 @@ function start() {
         const replyText = String(args.replyText);
         const approvalToken = String(args.approvalToken);
         const project = await loadProject(db, projectId);
-        const uid = project.gmail.composioUserId;
-        if (!uid) throw new Error("project.gmail.composioUserId is missing");
+        if (!project.gmail.composioUserId?.trim()) throw new Error("project.gmail.composioUserId is missing");
         const threadRef = db.collection(collections.emailThreads).doc(threadId);
         const tokenRef = db.collection(collections.approvalTokens).doc(approvalToken);
         const dryRun = cfg.dryRun || project.dryRun === true;
@@ -335,12 +368,12 @@ function start() {
           });
         } else {
           const to = extractEmailFromFromHeader(thPre.clientEmail || "");
-          await executeTool(uid, "GMAIL_REPLY_TO_THREAD", {
+          await executeTool("GMAIL_REPLY_TO_THREAD", {
             thread_id: thPre.gmailThreadId,
             message_body: replyText,
             recipient_email: to,
             user_id: "me",
-          });
+          }, project);
         }
 
         const hist = [...(thPre.stateHistory || [])];
@@ -385,7 +418,7 @@ function start() {
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
       const durationMs = Date.now() - t0;
-      const err = e instanceof Error ? e.message : String(e);
+      const err = formatComposioExecutionError(e);
       await audit(db, name, args, { error: err }, durationMs, String(args.projectId), args.threadId as string | undefined);
       return { content: [{ type: "text", text: JSON.stringify({ error: err }) }], isError: true };
     }
